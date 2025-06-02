@@ -9,7 +9,7 @@ import numpy as np
 
 st.set_page_config(
     page_title="Virtual Labs QA",
-    page_icon="🔍",
+    page_icon="vlabs.png",
     layout="wide"
 )
 
@@ -291,7 +291,7 @@ if st.session_state.evaluation_complete and st.session_state.results:
                     if evaluation['status'] == "Evaluated":
                         with st.expander(f"{file_path} - Score: {evaluation['average_score']:.1f}/10"):
                             if evaluation.get('is_template', False):
-                                st.warning("This appears to be template content that needs to be customized")
+                                st.warning("⚠️ This appears to be template content that needs to be customized")
                             
                             # Create score chart for this file
                             criteria = list(evaluation['scores'].keys())
@@ -414,8 +414,20 @@ if st.session_state.evaluation_complete and st.session_state.results:
             st.markdown(simulation_results.get('technical_assessment', 'No assessment available'))
     
     with tab4:
-        # Full report in Markdown
-        st.markdown(results['report'])
+        # Full report in Markdown - process it to ensure proper display
+        report_text = results['report']
+        
+        # Additional cleanup for the report display
+        report_text = report_text.replace("```json", "")
+        report_text = report_text.replace("```", "")
+        
+        # Remove any lines that might be agent acknowledgments
+        lines = report_text.split('\n')
+        filtered_lines = [line for line in lines 
+                        if not line.startswith(("Okay,", "Sure,", "I'll", "Here's", "I will"))]
+        report_text = '\n'.join(filtered_lines)
+        
+        st.markdown(report_text)
         
     # Export options at the bottom
     st.header("Export Options")
