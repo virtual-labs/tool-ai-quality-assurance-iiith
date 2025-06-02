@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 import subprocess
+import re
 from BaseAgent import BaseAgent
 from Agents.RepositoryAgent import RepositoryAgent
 from Agents.StructureComplianceAgent import StructureComplianceAgent
@@ -10,9 +11,43 @@ from Agents.SimulationEvaluationAgent import SimulationEvaluationAgent
 from Agents.ScoreCalculationAgent import ScoreCalculationAgent
 from langchain_google_genai import ChatGoogleGenerativeAI
 import dotenv
+import toml
 
 # Load environment variables
 dotenv.load_dotenv()
+
+# Load configuration
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.toml")
+try:
+    CONFIG = toml.load(CONFIG_PATH)
+except Exception as e:
+    print(f"Warning: Could not load config file: {str(e)}")
+    # Define minimal default configuration
+    CONFIG = {
+        "general": {"default_model": "gemini-2.0-flash"},
+        "weights": {"structure": 0.25, "content": 0.5, "simulation": 0.25},
+        "thresholds": {"structure_minimum": 3.0}
+    }
+
+def clean_report(report_text):
+    """Clean up report text by removing unwanted markdown artifacts and acknowledgments"""
+    # Remove code blocks
+    report_text = re.sub(r'```[a-z]*\n', '', report_text)
+    report_text = report_text.replace("```", "")
+    
+    # Remove acknowledgment lines
+    lines = report_text.split('\n')
+    filtered_lines = []
+    
+    for line in lines:
+        # Skip lines that look like acknowledgments
+        if any(phrase in line.lower() for phrase in [
+            "i will", "okay,", "sure,", "here's", "here is", "as requested"
+        ]) and len(line) < 100:  # Usually acknowledgments are short
+            continue
+        filtered_lines.append(line)
+    
+    return '\n'.join(filtered_lines)
 
 class QAPipeline:
     def __init__(self, model="gemini-2.0-flash"):
@@ -34,6 +69,9 @@ class QAPipeline:
         
         try:
             subprocess.check_call(['git', 'clone', repo_url, self.temp_dir], 
+                                 stderr=subprocess.STDOUT)
+            # checkout to `testing` branch
+            subprocess.check_call(['git', '-C', self.temp_dir, 'checkout', 'testing'], 
                                  stderr=subprocess.STDOUT)
             return True, f"Repository cloned successfully to {self.temp_dir}"
         except subprocess.CalledProcessError as e:
@@ -94,14 +132,14 @@ class QAPipeline:
         return self.final_score
         
     def get_report(self):
-        """Return the detailed evaluation report"""
-        return self.report
+        """Return the cleaned detailed evaluation report"""
+        return clean_report(self.report)
         
     def get_results(self):
-        """Return all evaluation results"""
+        """Return all evaluation results with cleaned report"""
         return {
             'final_score': self.final_score,
-            'report': self.report,
+            'report': clean_report(self.report),
             'detailed_results': self.evaluation_results
         }
         

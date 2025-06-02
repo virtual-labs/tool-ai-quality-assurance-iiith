@@ -7,59 +7,66 @@ class ScoreCalculationAgent(BaseAgent):
     role = "Quality Score Calculator"
     basic_prompt_template = """
     You are an expert in evaluating Virtual Labs quality and providing detailed feedback.
-    
+
     Based on the detailed evaluation results below, create a comprehensive quality report for this Virtual Lab repository:
-    
+
     Experiment Name: {experiment_name}
-    
+
     STRUCTURE EVALUATION:
     Structure Compliance Score: {structure_score}/10
     Structure Status: {structure_status}
     Missing Files: {missing_files}
     Missing Directories: {missing_dirs}
-    
+
     CONTENT EVALUATION:
     Content Quality Score: {content_score}/10
     Files Evaluated: {files_evaluated}/{total_files}
     Template Files Detected: {template_files} ({template_percentage}%)
-    
+
     SIMULATION EVALUATION:
     Simulation Quality Score: {simulation_score}/10
     Simulation Status: {simulation_status}
     Complexity: {complexity}/10
     Libraries Used: {libraries}
-    
+
+    IMPORTANT FORMATTING INSTRUCTIONS:
+    - Start directly with the report content without any acknowledgments
+    - Do NOT include any backticks (```) in your response
+    - Do NOT include any code blocks or JSON blocks
+    - Use Markdown formatting for headings, lists and emphasis
+    - Use plain text for all content
+
     Create a comprehensive quality report in Markdown format with the following sections:
-    
+
     # Virtual Lab Quality Report: {experiment_name}
-    
+
     ## Executive Summary
     [Brief overview of quality assessment with overall score (0-100)]
-    
+
     ## Strengths
     [List key strengths as bullet points]
-    
+
     ## Areas for Improvement
     [List aspects that need attention as bullet points]
-    
+
     ## Detailed Assessment
-    
+
     ### 1. Structure Evaluation
     [Provide details about structure compliance, missing components, recommendations]
-    
+
     ### 2. Content Evaluation
     [Provide details about content quality, templates vs. custom content, specific feedback]
-    
+
     ### 3. Simulation Evaluation
     [Provide details about simulation quality, functionality, improvement suggestions]
-    
+
     ## Recommendations
     [Provide specific, actionable recommendations as numbered list]
-    
+
     ## Conclusion
     [Provide final assessment and next steps]
-    
-    Use formatting features like headings, bullet points, tables, and bold text to make the report clear and professional.
+
+    Use formatting features like headings, bullet points, and bold text to make the report clear and professional.
     """
     
     def __init__(self, evaluation_results):
@@ -164,6 +171,29 @@ class ScoreCalculationAgent(BaseAgent):
         
         try:
             report = super().get_output()
+            
+            # Clean up the report by removing prompt acknowledgments and triple backticks
+            report_lines = report.split('\n')
+            cleaned_lines = []
+            skip_line = False
+            skip_json = False
+            
+            for line in report_lines:
+                # Skip acknowledgment lines
+                if "I will generate" in line or "Here's the" in line or "Okay," in line:
+                    continue
+                    
+                # Skip markdown code blocks and their content
+                if "```" in line:
+                    skip_json = not skip_json
+                    continue
+                    
+                # Include the line if we're not skipping
+                if not skip_json:
+                    cleaned_lines.append(line)
+                    
+            # Rejoin cleaned lines
+            report = '\n'.join(cleaned_lines)
         except Exception as e:
             # Fallback report if LLM fails
             report = f"""
