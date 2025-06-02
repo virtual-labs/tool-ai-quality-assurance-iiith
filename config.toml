@@ -1,0 +1,67 @@
+# Virtual Labs QA Tool Configuration
+
+[general]
+version = "1.0.0"
+default_model = "gemini-2.0-flash"
+available_models = [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite", 
+    "gemini-2.5-flash-preview-05-20"
+]
+temp_cleanup = true
+
+[llm]
+temperature = 0.2
+max_tokens = 100000
+
+[weights]
+# Component weights for final score calculation (must sum to 1.0)
+structure = 0.25
+content = 0.5
+simulation = 0.25
+
+[thresholds]
+# Minimum scores and penalties
+structure_minimum = 3.0
+template_penalty = 0.3
+good_score = 8.0
+satisfactory_score = 5.0
+minimum_content_length = 50
+
+[content]
+# Files to evaluate for content quality
+content_files = [
+    "experiment/aim.md",
+    "experiment/theory.md",
+    "experiment/procedure.md",
+    "experiment/README.md",
+    "pedagogy/README.md",
+    "storyboard/README.md"
+]
+
+# Common phrases to detect template content
+template_indicators = [
+    "please fill",
+    "add your",
+    "instructor note",
+    "template",
+    "replace with",
+    "todo",
+    "[your ",
+    "your content here",
+    "insert ",
+    "enter "
+]
+
+[ui]
+# Chart colors for consistent UI
+colors = {
+    "structure": "blue",
+    "content": "green", 
+    "simulation": "purple",
+    "custom_content": "#66b3ff",
+    "template_content": "#ff9999",
+    "good_score": "green",
+    "medium_score": "orange",
+    "low_score": "red"
+}
