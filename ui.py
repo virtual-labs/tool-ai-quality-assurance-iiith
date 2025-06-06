@@ -1,11 +1,16 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 import json
 import time
+import re
 from main import QAPipeline
-import numpy as np
+from config_loader import load_config
+
+# Load configuration
+CONFIG = load_config()
 
 st.set_page_config(
     page_title="Virtual Labs QA",
@@ -16,40 +21,157 @@ st.set_page_config(
 st.title("Virtual Labs Quality Assurance Pipeline")
 st.markdown("This tool evaluates the quality of Virtual Labs repositories based on structure, content, and simulation.")
 
-# Initialize session state variables
-if 'pipeline' not in st.session_state:
-    st.session_state.pipeline = QAPipeline()
-if 'evaluation_complete' not in st.session_state:
-    st.session_state.evaluation_complete = False
-if 'results' not in st.session_state:
-    st.session_state.results = None
-if 'error_message' not in st.session_state:
-    st.session_state.error_message = None
-if 'progress' not in st.session_state:
-    st.session_state.progress = 0
-if 'progress_message' not in st.session_state:
-    st.session_state.progress_message = ""
+# Initialize session state variables properly at the top
+def initialize_session_state():
+    """Initialize all session state variables with proper defaults"""
+    defaults = {
+        'pipeline': None,  # Will be created when needed
+        'evaluation_complete': False,
+        'results': None,
+        'error_message': None,
+        'progress': 0,
+        'progress_message': "",
+        'branches': [],
+        'selected_branch': "main",
+        'custom_weights': CONFIG["weights"].copy(),
+        'raw_weights': CONFIG["weights"].copy(),
+        'repo_url_input': ""  # Add this to persist URL input
+    }
+    
+    for key, default_value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default_value
 
-# Side panel with options
+# Call initialization at the very beginning
+initialize_session_state()
+
+# Ensure pipeline is always available
+if st.session_state.pipeline is None:
+    st.session_state.pipeline = QAPipeline()
+
+# Alternative approach using session state keys for slider values
+
 with st.sidebar:
     st.header("Options")
     model = st.selectbox(
         "Select LLM model",
-        ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.5-flash-preview-05-20"]
+        CONFIG["general"]["available_models"]
     )
     
-    if st.button("Reset Evaluation", type="secondary"):
-        st.session_state.pipeline.cleanup()
-        st.session_state.evaluation_complete = False
-        st.session_state.results = None
-        st.session_state.error_message = None
-        st.session_state.progress = 0
-        st.session_state.progress_message = ""
-        st.session_state.pipeline = QAPipeline(model=model)
-        st.rerun()
+    st.markdown("---")
+    st.subheader("Evaluation Weights")
+    
+    # Initialize slider values separately from normalized weights
+    if 'slider_structure' not in st.session_state:
+        st.session_state.slider_structure = CONFIG["weights"]["structure"]
+    if 'slider_content' not in st.session_state:
+        st.session_state.slider_content = CONFIG["weights"]["content"]
+    if 'slider_simulation' not in st.session_state:
+        st.session_state.slider_simulation = CONFIG["weights"]["simulation"]
+    
+    # Use session state keys for slider values
+    structure_weight = st.slider(
+        "Structure Weight", 
+        min_value=0.0, 
+        max_value=1.0, 
+        step=0.01,
+        help="Weight for repository structure compliance",
+        key="slider_structure"
+    )
+    
+    content_weight = st.slider(
+        "Content Weight", 
+        min_value=0.0, 
+        max_value=1.0, 
+        step=0.01,
+        help="Weight for educational content quality",
+        key="slider_content"
+    )
+    
+    simulation_weight = st.slider(
+        "Simulation Weight", 
+        min_value=0.0, 
+        max_value=1.0, 
+        step=0.01,
+        help="Weight for simulation implementation",
+        key="slider_simulation"
+    )
+    
+    # Real-time normalization
+    total_weight = structure_weight + content_weight + simulation_weight
+    
+    if total_weight > 0:
+        # Calculate normalized weights
+        normalized_weights = {
+            "structure": round(structure_weight / total_weight, 2),
+            "content": round(content_weight / total_weight, 2),
+            "simulation": round(simulation_weight / total_weight, 2)
+        }
+        
+        # Ensure sum equals 1.0
+        weight_sum = sum(normalized_weights.values())
+        if abs(weight_sum - 1.0) > 0.005:
+            diff = 1.0 - weight_sum
+            max_key = max(normalized_weights, key=normalized_weights.get)
+            normalized_weights[max_key] = round(normalized_weights[max_key] + diff, 2)
+        
+        # Store normalized weights
+        st.session_state.custom_weights = normalized_weights
+        
+        # Visual feedback
+        st.markdown("**Live Weight Distribution:**")
+        st.progress(normalized_weights["structure"], text=f"Structure: {normalized_weights['structure']:.2f} ({normalized_weights['structure']*100:.0f}%)")
+        st.progress(normalized_weights["content"], text=f"Content: {normalized_weights['content']:.2f} ({normalized_weights['content']*100:.0f}%)")
+        st.progress(normalized_weights["simulation"], text=f"Simulation: {normalized_weights['simulation']:.2f} ({normalized_weights['simulation']*100:.0f}%)")
+        
+        st.success(f"**Total: {sum(normalized_weights.values()):.2f}**")
+    else:
+        st.error("⚠️ All weights cannot be zero!")
+    
+    # Reset buttons with proper key handling
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Reset Weights", type="secondary", use_container_width=True):
+            # Delete the slider keys to force recreation with default values
+            slider_keys = ['slider_structure', 'slider_content', 'slider_simulation']
+            for key in slider_keys:
+                if key in st.session_state:
+                    del st.session_state[key]
+            
+            # Reset the custom weights
+            st.session_state.custom_weights = CONFIG["weights"].copy()
+            st.rerun()
+    
+    with col2:
+        if st.button("Reset All", type="secondary", use_container_width=True):
+            # Store URL before reset
+            current_url = st.session_state.get('repo_url_input', "")
+            
+            # Clear most session state but preserve form keys
+            keys_to_keep = [k for k in st.session_state.keys() if k.startswith('FormSubmitter')]
+            
+            for key in list(st.session_state.keys()):
+                if key not in keys_to_keep:
+                    del st.session_state[key]
+            
+            # Reinitialize essential state (don't set slider values directly)
+            st.session_state.custom_weights = CONFIG["weights"].copy()
+            st.session_state.repo_url_input = current_url
+            st.session_state.evaluation_complete = False
+            st.session_state.results = None
+            st.session_state.branches = []
+            st.session_state.selected_branch = "main"
+            st.session_state.pipeline = None
+            
+            st.rerun()
         
     st.markdown("---")
-    st.markdown("**VLabs QA Tool v1.0**")
+    st.markdown(f"**VLabs QA Tool v{CONFIG['general']['version']}**")
+
+# Initialize custom weights if not present
+if 'custom_weights' not in st.session_state:
+    st.session_state.custom_weights = CONFIG["weights"].copy()
 
 # Step 1: Input repository URL
 with st.container():
@@ -58,74 +180,158 @@ with st.container():
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        repo_url = st.text_input("Enter Git Repository URL", 
-                            placeholder="https://github.com/username/repo")
-    
-    with col2:
-        analyze_btn = st.button("Analyze Repository", type="primary", use_container_width=True)
-    
-    if analyze_btn and repo_url:
-        st.session_state.progress = 0
-        st.session_state.progress_message = "Cloning repository..."
-        progress_bar = st.progress(st.session_state.progress)
+        # Use session state to persist URL input
+        repo_url = st.text_input(
+            "Enter Git Repository URL", 
+            value=st.session_state.repo_url_input,
+            placeholder="https://github.com/username/repo",
+            key="url_input"
+        )
         
-        with st.spinner("Cloning repository..."):
-            success, message = st.session_state.pipeline.clone_repository(repo_url)
+        # Update session state when URL changes
+        if repo_url != st.session_state.repo_url_input:
+            st.session_state.repo_url_input = repo_url
+            # Clear branches when URL changes
+            st.session_state.branches = []
+            st.session_state.selected_branch = "main"
+    
+    # Initialize branches and selected_branch if not present
+    if 'branches' not in st.session_state:
+        st.session_state.branches = []
+    
+    if 'selected_branch' not in st.session_state:
+        st.session_state.selected_branch = "main"
+    
+    # Show branch selection only if branches are fetched
+    if st.session_state.branches:
+        branch = st.selectbox(
+            "Select Branch",
+            st.session_state.branches,
+            index=st.session_state.branches.index(st.session_state.selected_branch) if st.session_state.selected_branch in st.session_state.branches else 0
+        )
+        st.session_state.selected_branch = branch
+    
+    # Button row - Use repo_url for enabling/disabling
+    cols = st.columns([1, 1, 2])
+    
+    with cols[0]:
+        fetch_btn = st.button("Fetch Branches", type="secondary", use_container_width=True, 
+                            disabled=not repo_url.strip())  # Check if URL is not empty
+    
+    with cols[1]:
+        analyze_btn = st.button("Analyze Repository", type="primary", use_container_width=True, 
+                               disabled=not repo_url.strip())  # Check if URL is not empty
+    
+    # Fetch branches if requested - ensure pipeline exists
+    if fetch_btn and repo_url.strip():
+        # Always ensure we have a valid pipeline
+        if st.session_state.pipeline is None:
+            try:
+                st.session_state.pipeline = QAPipeline()
+            except Exception as e:
+                st.error(f"Failed to initialize pipeline: {str(e)}")
+                st.stop()
+    
+        with st.spinner("Fetching branches..."):
+            try:
+                success, result = st.session_state.pipeline.get_repository_branches(repo_url.strip())
+                
+                if not success:
+                    st.error(f"❌ Branch fetch failed: {result}")
+                    st.session_state.branches = []
+                else:
+                    st.session_state.branches = result
+                    st.session_state.selected_branch = result[0] if result else "main"
+                    st.success(f"✅ Found {len(result)} branches: {', '.join(result[:3])}{'...' if len(result) > 3 else ''}")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error fetching branches: {str(e)}")
+                st.session_state.branches = []
+
+# Start analysis when button is clicked
+if analyze_btn and repo_url.strip():
+    # Always create a fresh pipeline with current settings
+    try:
+        st.session_state.pipeline = QAPipeline(model=model, custom_weights=st.session_state.custom_weights)
+    except Exception as e:
+        st.error(f"Failed to initialize pipeline: {str(e)}")
+        st.stop()
+    
+    # Reset evaluation state
+    st.session_state.evaluation_complete = False
+    st.session_state.results = None
+    st.session_state.error_message = None
+    
+    # Initialize progress tracking
+    progress_container = st.empty()
+    
+    with progress_container.container():
+        progress_bar = st.progress(0, text="Cloning repository...")
+    
+    with st.spinner("Cloning repository..."):
+        try:
+            branch = st.session_state.selected_branch if st.session_state.branches else "main"
+            success, message = st.session_state.pipeline.clone_repository(repo_url, branch)
             
             if not success:
-                st.session_state.error_message = message
-                st.error(message)
+                progress_container.empty()
+                st.error(f"❌ Clone failed: {message}")
             else:
-                st.session_state.progress = 25
-                st.session_state.progress_message = "Evaluating structure..."
-                progress_bar.progress(st.session_state.progress, text=st.session_state.progress_message)
+                # Update progress for evaluation
+                with progress_container.container():
+                    progress_bar = st.progress(25, text="Evaluating structure...")
                 
                 with st.spinner("Evaluating quality..."):
                     try:
-                        # Step-by-step progress updates
                         success, message = st.session_state.pipeline.evaluate_repository()
                         
-                        # Update progress at each major step
-                        st.session_state.progress = 50
-                        st.session_state.progress_message = "Evaluating content..."
-                        progress_bar.progress(st.session_state.progress, text=st.session_state.progress_message)
-                        time.sleep(0.5)
+                        # Update progress steps
+                        with progress_container.container():
+                            progress_bar = st.progress(50, text="Evaluating content...")
+                        time.sleep(0.2)
                         
-                        st.session_state.progress = 75
-                        st.session_state.progress_message = "Evaluating simulation..."
-                        progress_bar.progress(st.session_state.progress, text=st.session_state.progress_message)
-                        time.sleep(0.5)
+                        with progress_container.container():
+                            progress_bar = st.progress(75, text="Evaluating simulation...")
+                        time.sleep(0.2)
                         
-                        st.session_state.progress = 90
-                        st.session_state.progress_message = "Generating final report..."
-                        progress_bar.progress(st.session_state.progress, text=st.session_state.progress_message)
-                        time.sleep(0.5)
+                        with progress_container.container():
+                            progress_bar = st.progress(90, text="Generating report...")
+                        time.sleep(0.2)
                         
-                        if not success:
-                            st.session_state.error_message = message
-                            st.error(message)
-                        else:
+                        if success:
                             st.session_state.evaluation_complete = True
                             st.session_state.results = st.session_state.pipeline.get_results()
                             
-                            st.session_state.progress = 100
-                            st.session_state.progress_message = "Evaluation complete!"
-                            progress_bar.progress(st.session_state.progress, text=st.session_state.progress_message)
+                            # Complete and hide progress
+                            with progress_container.container():
+                                progress_bar = st.progress(100, text="Complete!")
+                            time.sleep(0.5)
+                            progress_container.empty()  # Remove progress bar
                             
-                            st.success("Evaluation completed successfully!")
+                            st.success("✅ Evaluation completed successfully!")
+                        else:
+                            progress_container.empty()
+                            st.error(f"❌ Evaluation failed: {message}")
+                            
                     except Exception as e:
-                        st.error(f"Evaluation failed: {str(e)}")
+                        progress_container.empty()
+                        st.error(f"❌ Evaluation error: {str(e)}")
+                    
+        except Exception as e:
+            progress_container.empty()
+            st.error(f"❌ Clone error: {str(e)}")
 
 # Step 2: Display Results
 if st.session_state.evaluation_complete and st.session_state.results:
     results = st.session_state.results
-    
     st.header("Quality Assessment Results")
     
-    # Extract experiment name if available
-    experiment_name = "Unknown Experiment"
-    if 'experiment_name' in results:
-        experiment_name = results['experiment_name']
+    # Extract experiment name properly
+    experiment_name = "Virtual Lab Experiment"
+    if 'detailed_results' in results and 'repository' in results['detailed_results']:
+        repo_data = results['detailed_results']['repository']
+        if 'experiment_name' in repo_data and repo_data['experiment_name']:
+            experiment_name = repo_data['experiment_name']
     
     st.subheader(f"Experiment: {experiment_name}")
     
@@ -319,7 +525,7 @@ if st.session_state.evaluation_complete and st.session_state.results:
                                 ax.text(score + 0.1, i, f"{score}", va='center')
                                 
                             # Add a vertical line to mark "good" threshold
-                            ax.axvline(x=7, color='gray', linestyle='--', alpha=0.5)
+                            ax.axvline (x=7, color='gray', linestyle='--', alpha=0.5)
                             ax.text(7.1, -0.5, 'Good threshold', color='gray', alpha=0.7)
                             
                             st.pyplot(fig)
@@ -414,71 +620,96 @@ if st.session_state.evaluation_complete and st.session_state.results:
             st.markdown(simulation_results.get('technical_assessment', 'No assessment available'))
     
     with tab4:
-        # Full report in Markdown - process it to ensure proper display
+        # Display report with minimal processing
         report_text = results['report']
         
-        # Additional cleanup for the report display
-        report_text = report_text.replace("```json", "")
-        report_text = report_text.replace("```", "")
-        
-        # Remove any lines that might be agent acknowledgments
-        lines = report_text.split('\n')
-        filtered_lines = [line for line in lines 
-                        if not line.startswith(("Okay,", "Sure,", "I'll", "Here's", "I will"))]
-        report_text = '\n'.join(filtered_lines)
+        # Only do essential cleanup
+        if not report_text.strip().startswith('#'):
+            # Find the actual report start
+            lines = report_text.split('\n')
+            report_lines = []
+            found_header = False
+            
+            for line in lines:
+                if line.strip().startswith('# Virtual Lab Quality Report'):
+                    found_header = True
+                if found_header:
+                    report_lines.append(line)
+            
+            if report_lines:
+                report_text = '\n'.join(report_lines)
         
         st.markdown(report_text)
         
-    # Export options at the bottom
-    st.header("Export Options")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("Export as JSON", use_container_width=True):
-            # Convert results to JSON
-            json_results = {
-                'experiment_name': experiment_name,
-                'final_score': float(results['final_score']),
-                'component_scores': {
-                    'structure': float(structure_score),
-                    'content': float(content_score),
-                    'simulation': float(simulation_score)
-                },
-                'report': results['report']
-            }
-            
-            st.download_button(
-                label="Download JSON Report",
-                data=json.dumps(json_results, indent=2),
-                file_name=f"{experiment_name.replace(' ', '_')}_qa_report.json",
-                mime="application/json",
-                use_container_width=True
-            )
-    
-    with col2:
-        if st.button("Export as Markdown", use_container_width=True):
-            st.download_button(
-                label="Download Markdown Report",
-                data=results['report'],
-                file_name=f"{experiment_name.replace(' ', '_')}_qa_report.md",
-                mime="text/markdown",
-                use_container_width=True
-            )
-    
-    with col3:
-        if st.button("Export as CSV", use_container_width=True):
-            # Create a simple CSV with key metrics
-            csv_data = f"Metric,Score\n"
-            csv_data += f"Overall Score,{results['final_score']:.1f}\n"
-            csv_data += f"Structure Score,{structure_score:.1f}\n"
-            csv_data += f"Content Score,{content_score:.1f}\n"
-            csv_data += f"Simulation Score,{simulation_score:.1f}\n"
-            csv_data += f"Template Percentage,{template_percentage:.1f}\n"
-            
-            st.download_button(
-                label="Download CSV Report",
-                data=csv_data,
-                file_name=f"{experiment_name.replace(' ', '_')}_qa_metrics.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+    # Export options at the bottom with clear descriptions
+    if st.session_state.evaluation_complete and st.session_state.results:
+        st.header("Export Options")
+        
+        # Add descriptions for each export type
+        st.markdown("""
+        **Export Formats:**
+        - **JSON**: Complete evaluation data including all scores, metrics, and technical details
+        - **Markdown**: Human-readable report with analysis and recommendations  
+        - **CSV**: Simple metrics table for spreadsheet analysis
+        """)
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**📊 Complete Data**")
+            if st.button("Export as JSON", use_container_width=True):
+                # Convert results to JSON (keep weights internal but don't emphasize)
+                json_results = {
+                    'experiment_name': experiment_name,
+                    'final_score': float(results['final_score']),
+                    'component_scores': {
+                        'structure': float(structure_score),
+                        'content': float(content_score),
+                        'simulation': float(simulation_score)
+                    },
+                    'template_percentage': float(template_percentage),
+                    'detailed_evaluation': results.get('detailed_results', {}),
+                    'report': results['report'],
+                    'evaluation_timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                }
+                
+                st.download_button(
+                    label="📥 Download JSON Report",
+                    data=json.dumps(json_results, indent=2),
+                    file_name=f"{experiment_name.replace(' ', '_')}_qa_report.json",
+                    mime="application/json",
+                    use_container_width=True,
+                    help="Complete evaluation data with all metrics and details"
+                )
+
+        with col2:
+            st.markdown("**📝 Formatted Report**")
+            if st.button("Export as Markdown", use_container_width=True):
+                st.download_button(
+                    label="📥 Download Markdown Report", 
+                    data=results['report'],
+                    file_name=f"{experiment_name.replace(' ', '_')}_qa_report.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                    help="Human-readable report with analysis and recommendations"
+                )
+
+        with col3:
+            st.markdown("**📋 Simple Metrics**")
+            if st.button("Export as CSV", use_container_width=True):
+                # Create a simple CSV with key metrics (no weights mentioned)
+                csv_data = f"Metric,Score\n"
+                csv_data += f"Overall Score,{results['final_score']:.1f}\n"
+                csv_data += f"Structure Score,{structure_score:.1f}\n"
+                csv_data += f"Content Score,{content_score:.1f}\n"
+                csv_data += f"Simulation Score,{simulation_score:.1f}\n"
+                csv_data += f"Template Percentage,{template_percentage:.1f}\n"
+                
+                st.download_button(
+                    label="📥 Download CSV Report",
+                    data=csv_data,
+                    file_name=f"{experiment_name.replace(' ', '_')}_qa_metrics.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    help="Key metrics in spreadsheet format"
+                )

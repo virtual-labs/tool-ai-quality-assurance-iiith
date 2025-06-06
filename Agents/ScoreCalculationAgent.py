@@ -1,82 +1,23 @@
 import os
 import json
 import re
+import tempfile
 from BaseAgent import BaseAgent
+from config_loader import load_config
+
+# Load the configuration
+CONFIG = load_config()
 
 class ScoreCalculationAgent(BaseAgent):
-    role = "Quality Score Calculator"
-    basic_prompt_template = """
-    You are an expert in evaluating Virtual Labs quality and providing detailed feedback.
-
-    Based on the detailed evaluation results below, create a comprehensive quality report for this Virtual Lab repository:
-
-    Experiment Name: {experiment_name}
-
-    STRUCTURE EVALUATION:
-    Structure Compliance Score: {structure_score}/10
-    Structure Status: {structure_status}
-    Missing Files: {missing_files}
-    Missing Directories: {missing_dirs}
-
-    CONTENT EVALUATION:
-    Content Quality Score: {content_score}/10
-    Files Evaluated: {files_evaluated}/{total_files}
-    Template Files Detected: {template_files} ({template_percentage}%)
-
-    SIMULATION EVALUATION:
-    Simulation Quality Score: {simulation_score}/10
-    Simulation Status: {simulation_status}
-    Complexity: {complexity}/10
-    Libraries Used: {libraries}
-
-    IMPORTANT FORMATTING INSTRUCTIONS:
-    - Start directly with the report content without any acknowledgments
-    - Do NOT include any backticks (```) in your response
-    - Do NOT include any code blocks or JSON blocks
-    - Use Markdown formatting for headings, lists and emphasis
-    - Use plain text for all content
-
-    Create a comprehensive quality report in Markdown format with the following sections:
-
-    # Virtual Lab Quality Report: {experiment_name}
-
-    ## Executive Summary
-    [Brief overview of quality assessment with overall score (0-100)]
-
-    ## Strengths
-    [List key strengths as bullet points]
-
-    ## Areas for Improvement
-    [List aspects that need attention as bullet points]
-
-    ## Detailed Assessment
-
-    ### 1. Structure Evaluation
-    [Provide details about structure compliance, missing components, recommendations]
-
-    ### 2. Content Evaluation
-    [Provide details about content quality, templates vs. custom content, specific feedback]
-
-    ### 3. Simulation Evaluation
-    [Provide details about simulation quality, functionality, improvement suggestions]
-
-    ## Recommendations
-    [Provide specific, actionable recommendations as numbered list]
-
-    ## Conclusion
-    [Provide final assessment and next steps]
-
-    Use formatting features like headings, bullet points, and bold text to make the report clear and professional.
-    """
-    
-    def __init__(self, evaluation_results):
-        self.evaluation_results = evaluation_results
+    def __init__(self, evaluation_results, custom_weights=None):
         super().__init__(
-            self.role, 
-            basic_prompt=self.basic_prompt_template, 
-            context=None
+            role="Quality Assessment Report Generator",
+            basic_prompt="Generate quality assessment report",
+            context=""
         )
-    
+        self.evaluation_results = evaluation_results
+        self.custom_weights = custom_weights if custom_weights else CONFIG["weights"].copy()
+
     def _count_template_files(self):
         """Count how many content files are templates"""
         if 'content' not in self.evaluation_results:
@@ -98,147 +39,137 @@ class ScoreCalculationAgent(BaseAgent):
         
         return template_count, total_evaluated, template_percentage
     
+    def clone_repository(self, repo_url, branch="main"):
+        """Clone the repository to a temporary directory"""
+        self.repo_url = repo_url
+        self.temp_dir = tempfile.mkdtemp()
+    
+        # Rest of the method...
+    
     def get_output(self):
-        # Calculate weighted final score
-        structure_weight = 0.25
-        content_weight = 0.5
-        simulation_weight = 0.25
+        # Use custom weights instead of config weights
+        structure_weight = self.custom_weights["structure"]
+        content_weight = self.custom_weights["content"]  
+        simulation_weight = self.custom_weights["simulation"]
         
         # Extract scores
         structure_score = self.evaluation_results.get('structure', {}).get('compliance_score', 0)
         content_score = self.evaluation_results.get('content', {}).get('average_score', 0)
         simulation_score = self.evaluation_results.get('simulation', {}).get('overall_score', 0)
         
-        # Extract experiment name
-        experiment_name = "Unknown Experiment"
+        # Get experiment name
+        experiment_name = "Virtual Lab Experiment"
         if 'repository' in self.evaluation_results:
-            experiment_name = self.evaluation_results['repository'].get('experiment_name', "Unknown Experiment")
-        
-        # Get template statistics
-        template_count, total_evaluated, template_percentage = self._count_template_files()
-        
-        # Get structure compliance details
-        structure_data = self.evaluation_results.get('structure', {})
-        structure_status = structure_data.get('structure_status', 'Unknown')
-        missing_files = ", ".join(structure_data.get('missing_files', [])[:5])
-        if len(structure_data.get('missing_files', [])) > 5:
-            missing_files += " and others"
-        missing_dirs = ", ".join(structure_data.get('missing_directories', [])[:3])
-        if len(structure_data.get('missing_directories', [])) > 3:
-            missing_dirs += " and others"
-            
-        # Get simulation details
-        simulation_data = self.evaluation_results.get('simulation', {})
-        simulation_status = simulation_data.get('simulation_status', 'Unknown')
-        complexity = simulation_data.get('complexity', 0)
-        libraries = ", ".join(simulation_data.get('libraries_used', []))
-        if not libraries:
-            libraries = "None detected"
-        
-        # Calculate final score (scale to 0-100)
+            repo_data = self.evaluation_results['repository']
+            if 'experiment_name' in repo_data and repo_data['experiment_name']:
+                experiment_name = repo_data['experiment_name']
+    
+        # Calculate final score with custom weights
         final_score = (
-            structure_score * structure_weight +
-            content_score * content_weight +
-            simulation_score * simulation_weight
-        ) * 10  # Scale to 0-100
-        
-        # Prepare context
-        self.context = (
-            f"Final Evaluation: {experiment_name}\n"
-            f"Structure: {structure_score}/10 ({structure_status})\n"
-            f"Content: {content_score}/10 ({template_count}/{total_evaluated} templates)\n"
-            f"Simulation: {simulation_score}/10 ({simulation_status}, Complexity: {complexity}/10)\n"
-            f"Overall Score: {final_score:.1f}/100"
+            structure_score * structure_weight * 10 +
+            content_score * content_weight * 10 +
+            simulation_score * simulation_weight * 10
         )
         
-        # Generate report using LLM
-        prompt = self.basic_prompt_template.format(
-            experiment_name=experiment_name,
-            structure_score=structure_score,
-            structure_status=structure_status,
-            missing_files=missing_files if missing_files else "None",
-            missing_dirs=missing_dirs if missing_dirs else "None",
-            content_score=content_score,
-            files_evaluated=total_evaluated,
-            total_files=total_evaluated + self.evaluation_results.get('content', {}).get('files_missing', 0),
-            template_files=template_count,
-            template_percentage=f"{template_percentage:.1f}",
-            simulation_score=simulation_score,
-            simulation_status=simulation_status,
-            complexity=complexity,
-            libraries=libraries
-        )
+        # Gather data
+        structure_data = self.evaluation_results.get('structure', {})
+        content_data = self.evaluation_results.get('content', {})
+        simulation_data = self.evaluation_results.get('simulation', {})
+        
+        # Create direct prompt WITHOUT weight information
+        direct_prompt = f"""Write a quality assessment report for the Virtual Lab experiment: {experiment_name}
+
+EVALUATION DATA:
+Structure Score: {structure_score}/10 - Status: {structure_data.get('structure_status', 'Unknown')}
+Content Score: {content_score}/10 - Files: {content_data.get('evaluated_count', 0)}/{content_data.get('total_files', 0)} - Templates: {content_data.get('template_count', 0)}
+Simulation Score: {simulation_score}/10 - Status: {simulation_data.get('simulation_status', 'Unknown')} - Complexity: {simulation_data.get('complexity', 0)}/10
+
+Final Score: {final_score:.1f}/100
+
+Write a markdown report starting with:
+
+# Virtual Lab Quality Report: {experiment_name}
+
+## Executive Summary
+Brief overview with overall score of {final_score:.1f}/100.
+
+## Component Analysis
+### Structure Evaluation: {structure_score * 10:.1f}/100
+### Content Evaluation: {content_score * 10:.1f}/100  
+### Simulation Evaluation: {simulation_score * 10:.1f}/100
+
+## Strengths
+- List key positive aspects
+
+## Areas for Improvement  
+- List issues that need attention
+
+## Recommendations
+1. Specific actionable recommendations
+2. Priority improvements needed
+
+## Conclusion
+Final assessment and next steps."""
+
+        # Set context directly
+        self.context = direct_prompt
         
         try:
             report = super().get_output()
             
-            # Clean up the report by removing prompt acknowledgments and triple backticks
-            report_lines = report.split('\n')
-            cleaned_lines = []
-            skip_line = False
-            skip_json = False
+            # Cleanup logic remains the same...
+            lines = report.split('\n')
+            clean_lines = []
+            found_start = False
             
-            for line in report_lines:
-                # Skip acknowledgment lines
-                if "I will generate" in line or "Here's the" in line or "Okay," in line:
+            for line in lines:
+                line_clean = line.strip()
+                
+                if any(unwanted in line_clean.lower() for unwanted in [
+                    'okay, i will', 'i will generate', 'here\'s the', 'here is the',
+                    'certainly', 'sure,', 'as requested', 'markdown'
+                ]):
                     continue
                     
-                # Skip markdown code blocks and their content
-                if "```" in line:
-                    skip_json = not skip_json
-                    continue
+                if line_clean.startswith('# Virtual Lab Quality Report'):
+                    found_start = True
                     
-                # Include the line if we're not skipping
-                if not skip_json:
-                    cleaned_lines.append(line)
-                    
-            # Rejoin cleaned lines
-            report = '\n'.join(cleaned_lines)
-        except Exception as e:
-            # Fallback report if LLM fails
-            report = f"""
-# Virtual Lab Quality Report: {experiment_name}
+                if found_start:
+                    clean_lines.append(line)
+        
+            if clean_lines:
+                report = '\n'.join(clean_lines)
+            else:
+                report = f"""# Virtual Lab Quality Report: {experiment_name}
 
 ## Executive Summary
+Overall Quality Score: {final_score:.1f}/100
 
-This report evaluates the quality of the Virtual Lab experiment "{experiment_name}". The overall quality score is **{final_score:.1f}/100**.
+## Component Scores
+- Structure: {structure_score * 10:.1f}/100
+- Content: {content_score * 10:.1f}/100  
+- Simulation: {simulation_score * 10:.1f}/100
 
-## Strengths
-- [Automated evaluation complete]
-
-## Areas for Improvement
-- {missing_files if missing_files else "No missing files"}
-- {missing_dirs if missing_dirs else "No missing directories"}
-- {f"{template_count} of {total_evaluated} content files appear to be templates" if template_count > 0 else ""}
-
-## Detailed Assessment
-
-### 1. Structure Evaluation
-Structure score: {structure_score}/10 ({structure_status})
-
-### 2. Content Evaluation
-Content score: {content_score}/10 ({template_count}/{total_evaluated} files are templates)
-
-### 3. Simulation Evaluation
-Simulation score: {simulation_score}/10 ({simulation_status}, Complexity: {complexity}/10)
+## Assessment
+This Virtual Lab has been evaluated across structure, content, and simulation components.
 
 ## Recommendations
-1. Complete missing files and directories
-2. Replace template content with actual content
-3. Improve simulation implementation
-
-## Conclusion
-This report was generated automatically. The quality assessment tool encountered an error generating the detailed report.
-"""
+Based on the evaluation, improvements are needed in areas scoring below 70/100."""
         
+        except Exception as e:
+            print(f"Error generating report: {str(e)}")
+            report = f"""# Quality Report: {experiment_name}
+
+Final Score: {final_score:.1f}/100"""
+    
         return {
             "final_score": final_score,
             "component_scores": {
-                "structure": structure_score * 10,  # Scale to 0-100
-                "content": content_score * 10,      # Scale to 0-100
-                "simulation": simulation_score * 10  # Scale to 0-100
+                "structure": structure_score * 10,
+                "content": content_score * 10,
+                "simulation": simulation_score * 10
             },
+            "weights_used": self.custom_weights.copy(),
             "report": report,
-            "experiment_name": experiment_name,
-            "template_percentage": template_percentage
+            "experiment_name": experiment_name
         }
