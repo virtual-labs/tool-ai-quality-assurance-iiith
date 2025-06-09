@@ -6,3 +6,4 @@ langchain_google_genai
 gitpython
 dotenv
 numpy
+toml
