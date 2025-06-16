@@ -74,34 +74,61 @@ class SimulationEvaluationAgent(BaseAgent):
         except Exception as e:
             return default
     
-    def _find_js_files(self):
-        """Find all JS files in the simulation directory"""
-        sim_dir = os.path.join(self.repo_path, "experiment/simulation/js")
+    def _find_all_simulation_files(self):
+        """Find ALL files in the simulation directory and subdirectories"""
+        sim_dir = os.path.join(self.repo_path, "experiment/simulation")
         if not os.path.exists(sim_dir):
-            return []
-            
-        js_files = []
-        for root, _, files in os.walk(sim_dir):
-            for file in files:
-                if file.endswith(".js"):
-                    js_files.append(os.path.relpath(os.path.join(root, file), self.repo_path))
+            return {
+                "html_files": [],
+                "js_files": [],
+                "css_files": [],
+                "image_files": [],
+                "json_files": [],
+                "other_files": []
+            }
         
-        return js_files
+        files = {
+            "html_files": [],
+            "js_files": [],
+            "css_files": [],
+            "image_files": [],
+            "json_files": [],
+            "other_files": []
+        }
+        
+        # Common file extensions
+        image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp']
+        
+        for root, dirs, file_list in os.walk(sim_dir):
+            for file in file_list:
+                file_path = os.path.relpath(os.path.join(root, file), self.repo_path)
+                file_lower = file.lower()
+                
+                # Skip very large files and system files
+                try:
+                    full_file_path = os.path.join(root, file)
+                    if os.path.getsize(full_file_path) > 5 * 1024 * 1024:  # Skip files larger than 5MB
+                        continue
+                    if file.startswith('.') or file.startswith('~'):  # Skip hidden/temp files
+                        continue
+                except:
+                    continue
+                
+                if file_lower.endswith(('.html', '.htm')):
+                    files["html_files"].append(file_path)
+                elif file_lower.endswith('.js'):
+                    files["js_files"].append(file_path)
+                elif file_lower.endswith('.css'):
+                    files["css_files"].append(file_path)
+                elif file_lower.endswith('.json'):
+                    files["json_files"].append(file_path)
+                elif any(file_lower.endswith(ext) for ext in image_extensions):
+                    files["image_files"].append(file_path)
+                else:
+                    files["other_files"].append(file_path)
+        
+        return files
     
-    def _find_css_files(self):
-        """Find all CSS files in the simulation directory"""
-        sim_dir = os.path.join(self.repo_path, "experiment/simulation/css")
-        if not os.path.exists(sim_dir):
-            return []
-            
-        css_files = []
-        for root, _, files in os.walk(sim_dir):
-            for file in files:
-                if file.endswith(".css"):
-                    css_files.append(os.path.relpath(os.path.join(root, file), self.repo_path))
-        
-        return css_files
-        
     def _check_common_libraries(self, html_content):
         """Check if simulation uses common libraries"""
         libraries = {
@@ -146,97 +173,124 @@ class SimulationEvaluationAgent(BaseAgent):
         
         return None
     
-    def _analyze_simulation_complexity(self, html_content, js_content):
-        """Analyze simulation complexity based on code"""
-        complexity = 5  # Default medium complexity
+    def _analyze_simulation_complexity(self, html_content, js_content, all_files):
+        """Analyze simulation complexity based on content and ALL file structure"""
+        complexity_score = 1  # Base score
         
-        if not js_content or len(js_content) < 100:
-            return max(1, complexity - 3)  # Very simple
-            
-        # Check for features that indicate complexity
-        features = {
-            "canvas": r'<canvas|getContext|createCanvas',
-            "svg": r'<svg|createElementNS.*svg|d3\.select',
-            "webgl": r'webgl|gl\.|THREE\.|glMatrix|WebGLRenderer',
-            "charts": r'chart\.|plotly|echarts|highcharts',
-            "animation": r'requestAnimationFrame|setInterval|setTimeout.*\d{3,}',
-            "interactivity": r'addEventListener|onclick|onchange|\.on\([\'"]click',
-            "ajax": r'fetch\(|\.ajax\(|XMLHttpRequest',
-            "simulation_logic": r'function\s+\w+Simulation|class\s+\w+Simulation|simulation\.start',
-        }
+        if html_content and html_content != "HTML file not found":
+            # Check HTML complexity
+            if len(html_content) > 1000:
+                complexity_score += 1
+            if 'canvas' in html_content.lower():
+                complexity_score += 2
+            if 'svg' in html_content.lower():
+                complexity_score += 1
+            if re.search(r'class\s*=', html_content):
+                complexity_score += 1
+            if 'webgl' in html_content.lower():
+                complexity_score += 2
         
-        # Combined content
-        combined = html_content + js_content
+        if js_content and js_content != "No JavaScript files found":
+            # Check JS complexity
+            js_length = len(js_content)
+            if js_length > 500:
+                complexity_score += 1
+            if js_length > 2000:
+                complexity_score += 1
+            if js_length > 5000:
+                complexity_score += 1
+                
+            # Check for complex JS features
+            if re.search(r'function\s+\w+', js_content):
+                complexity_score += 1
+            if re.search(r'class\s+\w+', js_content):
+                complexity_score += 1
+            if 'addEventListener' in js_content:
+                complexity_score += 1
+            if re.search(r'setInterval|setTimeout', js_content):
+                complexity_score += 1
+            if re.search(r'fetch|XMLHttpRequest|ajax', js_content, re.IGNORECASE):
+                complexity_score += 1
         
-        # Count matches
-        feature_count = 0
-        for _, pattern in features.items():
-            if re.search(pattern, combined, re.IGNORECASE):
-                feature_count += 1
+        # Factor in ALL files found in simulation directory
+        total_files = sum(len(files) for files in all_files.values())
+        if total_files > 5:
+            complexity_score += 1
+        if total_files > 10:
+            complexity_score += 1
+        if total_files > 20:
+            complexity_score += 1
         
-        # Adjust complexity based on features and code size
-        code_size_factor = min(3, max(0, (len(js_content) - 500) / 1000))
+        # Factor in file diversity
+        file_types = sum(1 for files in all_files.values() if files)
+        complexity_score += min(3, file_types - 1)  # Bonus for having multiple file types, capped at 3
         
-        # Calculate final complexity
-        final_complexity = min(10, max(1, complexity + feature_count * 0.5 + code_size_factor))
+        # Bonus for having JSON configuration files
+        if all_files["json_files"]:
+            complexity_score += 1
         
-        return final_complexity
-    
+        # Bonus for having multiple HTML files (multi-page simulation)
+        if len(all_files["html_files"]) > 1:
+            complexity_score += 1
+        
+        return min(10, complexity_score)  # Cap at 10
+
     def get_output(self):
-        # Get HTML content
+        """Evaluate simulation quality by checking ALL files in simulation folder"""
+        
+        # Find all files in simulation directory and subdirectories
+        all_files = self._find_all_simulation_files()
+        
+        # Get main HTML content
         html_content = self._read_file_content(
             "experiment/simulation/index.html",
             "HTML file not found"
         )
         
-        # Fast check if simulation exists
-        if html_content == "HTML file not found":
-            # Return early without making API call
-            return {
-                "functionality_score": 0,
-                "code_quality_score": 0,
-                "ux_score": 0,
-                "educational_value": 0,
-                "technical_score": 0,
-                "overall_score": 0,
-                "technical_assessment": "Simulation does not exist",
-                "simulation_status": "Missing",
-                "complexity": 0,
-                "libraries_used": [],
-                "js_files_count": 0,
-                "css_files_count": 0
-            }
+        # If no index.html, try to find any HTML file
+        if html_content == "HTML file not found" and all_files["html_files"]:
+            html_content = self._read_file_content(all_files["html_files"][0], "HTML file not found")
         
-        # Get JS content (concatenate all JS files)
-        js_files = self._find_js_files()
+        # Get JS content (concatenate all JS files, but limit for API)
+        js_files = all_files["js_files"]
         js_content = ""
-        for js_file in js_files[:3]:  # Limit to first 3 files to avoid token limits
+        
+        for js_file in js_files[:5]:  # Limit to first 5 JS files to avoid token limits
             js_content += f"// File: {js_file}\n"
-            js_content += self._read_file_content(js_file, "// JS file content not available") + "\n\n"
+            content = self._read_file_content(js_file, "// JS file content not available")
+            js_content += content[:2000] + "\n\n"  # Limit each file to 2000 chars
         
         if not js_content:
             js_content = "No JavaScript files found"
         
         # Get CSS content (concatenate all CSS files)
-        css_files = self._find_css_files()
+        css_files = all_files["css_files"]
         css_content = ""
-        for css_file in css_files[:2]:  # Limit to first 2 files to avoid token limits
+        
+        for css_file in css_files[:3]:  # Limit to first 3 CSS files
             css_content += f"/* File: {css_file} */\n"
-            css_content += self._read_file_content(css_file, "/* CSS file content not available */") + "\n\n"
+            content = self._read_file_content(css_file, "/* CSS file content not available */")
+            css_content += content[:1500] + "\n\n"  # Limit each file to 1500 chars
         
         if not css_content:
             css_content = "No CSS files found"
         
         # Check for simulation complexity and libraries used
-        simulation_complexity = self._analyze_simulation_complexity(html_content, js_content)
+        simulation_complexity = self._analyze_simulation_complexity(html_content, js_content, all_files)
         used_libraries = self._check_common_libraries(html_content)
         
-        # Set context
+        # Enhanced context with ALL file information
+        file_summary = []
+        for file_type, files in all_files.items():
+            if files:
+                file_summary.append(f"{file_type}: {len(files)} files")
+        
         self.context = (
-            f"Simulation files: HTML: {'Found' if html_content != 'HTML file not found' else 'Not found'}, "
-            f"JS: {len(js_files)} files, CSS: {len(css_files)} files\n"
+            f"Simulation files found: {', '.join(file_summary)}\n"
+            f"Total files: {sum(len(files) for files in all_files.values())}\n"
             f"Complexity assessment: {simulation_complexity}/10\n"
-            f"Libraries: {', '.join(used_libraries) if used_libraries else 'None detected'}"
+            f"Libraries: {', '.join(used_libraries) if used_libraries else 'None detected'}\n"
+            f"File structure: {dict(all_files)}"
         )
         
         # Check if simulation exists
@@ -250,10 +304,10 @@ class SimulationEvaluationAgent(BaseAgent):
                 "overall_score": 0,
                 "technical_assessment": "Simulation does not exist or is incomplete",
                 "simulation_status": "Missing",
-                "complexity": 0,
-                "libraries_used": [],
-                "js_files_count": len(js_files),
-                "css_files_count": len(css_files)
+                "complexity": simulation_complexity,
+                "libraries_used": used_libraries,
+                "all_files": all_files,
+                "file_count": sum(len(files) for files in all_files.values())
             }
         
         # Evaluate simulation
@@ -310,13 +364,13 @@ class SimulationEvaluationAgent(BaseAgent):
                     "simulation_status": "Available",
                     "complexity": simulation_complexity,
                     "libraries_used": used_libraries,
-                    "js_files_count": len(js_files),
-                    "css_files_count": len(css_files),
+                    "all_files": all_files,
+                    "file_count": sum(len(files) for files in all_files.values()),
                     "raw_evaluation": evaluation
                 }
             else:
                 # Could not parse JSON, create reasonable default scores
-                # Base scores on simulation complexity
+                # Base scores on simulation complexity and file diversity
                 functionality_score = min(8, simulation_complexity)
                 code_quality_score = min(7, simulation_complexity * 0.8)
                 ux_score = min(7, simulation_complexity * 0.9)
@@ -333,12 +387,12 @@ class SimulationEvaluationAgent(BaseAgent):
                     "educational_value": educational_value,
                     "technical_score": technical_score,
                     "overall_score": overall_score,
-                    "technical_assessment": f"Simulation appears to be of {['very low', 'low', 'below average', 'average', 'above average', 'good', 'very good', 'excellent', 'exceptional', 'outstanding'][int(simulation_complexity)-1]} complexity.",
+                    "technical_assessment": f"Simulation appears to be of {['very low', 'low', 'below average', 'average', 'above average', 'good', 'very good', 'excellent', 'exceptional', 'outstanding'][int(simulation_complexity)-1]} complexity with {sum(len(files) for files in all_files.values())} total files.",
                     "simulation_status": "Available",
                     "complexity": simulation_complexity,
                     "libraries_used": used_libraries,
-                    "js_files_count": len(js_files),
-                    "css_files_count": len(css_files),
+                    "all_files": all_files,
+                    "file_count": sum(len(files) for files in all_files.values()),
                     "raw_evaluation": evaluation
                 }
                 
@@ -357,6 +411,6 @@ class SimulationEvaluationAgent(BaseAgent):
                 "simulation_status": "Error",
                 "complexity": simulation_complexity,
                 "libraries_used": used_libraries,
-                "js_files_count": len(js_files),
-                "css_files_count": len(css_files)
+                "all_files": all_files,
+                "file_count": sum(len(files) for files in all_files.values())
             }

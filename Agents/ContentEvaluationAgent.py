@@ -5,333 +5,336 @@ from BaseAgent import BaseAgent
 
 class ContentEvaluationAgent(BaseAgent):
     role = "Content Quality Evaluator"
+    
     basic_prompt_template = """
-    You are an expert in evaluating educational content quality for Virtual Labs.
-    
-    Evaluate the following content file from a Virtual Lab repository:
-    
-    File: {file_name}
-    
-    Content:
-    ```
-    {content}
-    ```
-    
-    Is this just a template or placeholder, or is it custom content filled in for this specific experiment?
-    
-    Evaluate this content on these criteria:
-    1. Educational Value: Does the content clearly explain concepts and achieve learning objectives?
-    2. Comprehensiveness: Does it cover all necessary topics completely?
-    3. Technical Accuracy: Is all information correct and up-to-date?
-    4. Organization & Structure: Is content logically organized with good flow?
-    5. Language & Readability: Is language clear, concise, and free of errors?
-    
-    For each criterion, provide:
-    - A score from 0-10
-    - Brief justification for the score
-    - Specific suggestions for improvement
-    
-    Format your response as a JSON object with the following structure:
-    ```json
-    {{
-      "is_template": true/false,
-      "template_confidence": 0-10,
-      "scores": {{
-        "Educational Value": X,
-        "Comprehensiveness": Y,
-        "Technical Accuracy": Z,
-        "Organization & Structure": A,
-        "Language & Readability": B
-      }},
-      "average_score": C,
-      "feedback": "Overall evaluation and suggestions for improvement",
-      "strengths": ["Strength 1", "Strength 2"],
-      "weaknesses": ["Weakness 1", "Weakness 2"]
-    }}
-    ```
-    """
-    
-    content_files = [
-        "experiment/aim.md",
-        "experiment/theory.md",
-        "experiment/procedure.md",
-        "experiment/README.md",
-        "pedagogy/README.md",
-        "storyboard/README.md",
-    ]
+You are an educational content evaluator for Virtual Labs.
 
-    # Common template phrases that indicate this is just a template
-    template_indicators = [
-        "please fill",
-        "add your",
-        "instructor note",
-        "template",
-        "replace with",
-        "todo",
-        "to-do",
-        "to do",
-        "[your ",
-        "your content here",
-        "insert ",
-        "enter ",
-        "click here",
-    ]
+Evaluate this content file:
+FILE: {file_name}
+CONTENT: {content}
+
+TEMPLATE DETECTION:
+Template content contains:
+- Placeholder text like "write the aim here", "add your content"
+- Generic terms like "Experiment Name", "Discipline Name" without context
+- Instructions to fill content rather than actual content
+
+EVALUATION CRITERIA (Score 1-10):
+1. Educational Value: Teaching effectiveness and learning value
+2. Completeness: Thoroughness and coverage
+3. Accuracy: Technical correctness
+4. Organization: Structure and logical flow
+5. Clarity: Language clarity and readability
+
+SCORING:
+- Template/placeholder: 1-3
+- Basic genuine content: 4-6
+- Good educational content: 7-8
+- Excellent comprehensive content: 9-10
+
+Respond in JSON only:
+{{
+  "is_template": boolean,
+  "scores": {{
+    "Educational Value": number,
+    "Completeness": number,
+    "Accuracy": number,
+    "Organization": number,
+    "Clarity": number
+  }},
+  "average_score": number,
+  "feedback": "brief evaluation"
+}}
+"""
+    
+    short_content_template = """
+Evaluate this short content file:
+FILE: {file_name}
+CONTENT: {content}
+
+Determine if template or genuine content.
+Template indicators: "Experiment Name", "Lab Name", placeholder text
+Genuine indicators: Specific names, actual titles
+
+JSON only:
+{{
+  "is_template": boolean,
+  "is_short_content": true,
+  "feedback": "brief explanation"
+}}
+"""
     
     def __init__(self, repo_path):
         self.repo_path = repo_path
-        super().__init__(
-            self.role, 
-            basic_prompt=self.basic_prompt_template, 
-            context=None
-        )
+        super().__init__(self.role, basic_prompt=self.basic_prompt_template, context=None)
     
     def _read_file_content(self, file_path):
-        """Read content from a file in the repository"""
         full_path = os.path.join(self.repo_path, file_path)
         if not os.path.exists(full_path):
-            return f"File not found: {file_path}"
-        
+            return None
         try:
             with open(full_path, 'r', encoding='utf-8') as file:
-                return file.read()
-        except Exception as e:
-            return f"Error reading file: {str(e)}"
+                return file.read().strip() or None
+        except:
+            return None
     
-    def _is_template(self, content):
-        """Check if content appears to be just a template"""
-        if not content or len(content.strip()) < 50:
-            return True, 10  # Empty or very short content is likely a template
+    def _is_short_content_file(self, file_path, content):
+        if not content:
+            return True
         
-        content_lower = content.lower()
+        short_files = ['experiment-name.md', 'contributors.md', 'lab-name.md', 'discipline.md']
+        file_name = os.path.basename(file_path).lower()
         
-        # Check for template indicators
-        template_matches = 0
-        for indicator in self.template_indicators:
-            if indicator in content_lower:
-                template_matches += 1
+        if any(short_file in file_name for short_file in short_files):
+            return True
         
-        # Calculate confidence based on matches
-        template_confidence = min(10, template_matches * 3)
+        word_count = len(content.split())
+        line_count = len(content.split('\n'))
         
-        # Also check if content contains placeholders like [xxx] or {{xxx}}
-        placeholder_patterns = [r'\[[\w\s]+\]', r'\{\{[\w\s]+\}\}']
-        for pattern in placeholder_patterns:
-            if re.search(pattern, content):
-                template_confidence = max(template_confidence, 7)
+        if word_count < 20 and line_count < 5:
+            content_clean = re.sub(r'[#*_`-]', '', content).strip()
+            if len(content_clean.split()) < 15:
+                return True
         
-        return template_confidence >= 5, template_confidence
+        return False
     
-    def _extract_json_from_text(self, text):
-        """Extract JSON from text that may contain other content"""
-        json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except:
-                pass
-                
-        # Try finding any JSON object in the text
-        json_pattern = r'(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
-        match = re.search(json_pattern, text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except:
-                pass
+    def _extract_json_from_response(self, text):
+        if not text:
+            return None
         
+        text = re.sub(r'```json\s*', '', text)
+        text = re.sub(r'```\s*', '', text)
+        text = text.strip()
+        
+        patterns = [r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', r'\{.*?\}']
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.DOTALL)
+            for match in matches:
+                try:
+                    parsed = json.loads(match)
+                    if isinstance(parsed, dict) and 'is_template' in parsed:
+                        return parsed
+                except:
+                    continue
         return None
     
-    def _evaluate_file_content(self, file_path):
-        """Evaluate content of a single file"""
+    def _validate_scores(self, json_data):
+        if not isinstance(json_data, dict) or 'is_template' not in json_data:
+            return None
+        
+        if json_data.get('is_short_content', False):
+            return {
+                "is_template": bool(json_data['is_template']),
+                "is_short_content": True,
+                "average_score": 5.0 if not json_data['is_template'] else 2.0,
+                "scores": {},
+                "feedback": json_data.get('feedback', 'Short content evaluation')
+            }
+        
+        scores = json_data.get('scores', {})
+        if not isinstance(scores, dict):
+            return None
+        
+        criteria = ["Educational Value", "Completeness", "Accuracy", "Organization", "Clarity"]
+        valid_scores = {}
+        
+        for criterion in criteria:
+            if criterion in scores:
+                score = scores[criterion]
+                if isinstance(score, (int, float)) and 1 <= score <= 10:
+                    valid_scores[criterion] = float(score)
+        
+        if len(valid_scores) < 4:
+            return None
+        
+        if len(valid_scores) < 5:
+            avg_existing = sum(valid_scores.values()) / len(valid_scores)
+            for criterion in criteria:
+                if criterion not in valid_scores:
+                    valid_scores[criterion] = round(avg_existing, 1)
+        
+        average_score = sum(valid_scores.values()) / len(valid_scores)
+        
+        return {
+            "is_template": bool(json_data['is_template']),
+            "scores": valid_scores,
+            "average_score": round(average_score, 1),
+            "is_short_content": False,
+            "feedback": json_data.get('feedback', 'Evaluation completed')
+        }
+    
+    def _evaluate_single_file(self, file_path):
         content = self._read_file_content(file_path)
         
-        if content.startswith("File not found") or content.startswith("Error reading"):
-            # Return early without making API call
-            return {
-                "file": file_path,
-                "status": "Not evaluated",
-                "reason": content,
-                "scores": {
-                    "Educational Value": 0,
-                    "Comprehensiveness": 0,
-                    "Technical Accuracy": 0,
-                    "Organization & Structure": 0,
-                    "Language & Readability": 0
-                },
-                "average_score": 0,
-                "feedback": "File could not be evaluated",
-                "is_template": False
-            }
-        
-        # Check if content is empty or too short
-        if len(content.strip()) < 50:
-            return {
-                "file": file_path,
-                "status": "Evaluated",
-                "scores": {
-                    "Educational Value": 1,
-                    "Comprehensiveness": 1, 
-                    "Technical Accuracy": 1,
-                    "Organization & Structure": 1,
-                    "Language & Readability": 1
-                },
-                "average_score": 1,
-                "feedback": "Content is too short or empty to evaluate properly.",
-                "is_template": True
-            }
-        
-        # Do a quick check for template indicators before making API call
-        is_template = self._is_template(content)
-        if is_template:
-            # If it's clearly a template, avoid API call and return pre-scored result
-            return {
-                "file": file_path,
-                "status": "Evaluated",
-                "scores": {
-                    "Educational Value": 2,
-                    "Comprehensiveness": 2,
-                    "Technical Accuracy": 3,
-                    "Organization & Structure": 3,
-                    "Language & Readability": 3
-                },
-                "average_score": 2.6,
-                "feedback": "This appears to be template content that hasn't been properly customized for this experiment.",
-                "is_template": True
-            }
-        
-        # Proceed with LLM evaluation for non-template content
-        try:
-            prompt = self.basic_prompt_template.format(
-                file_name=file_path,
-                content=content[:8000]  # Limit content length to avoid token limits
-            )
-            
-            self.context = f"File: {file_path}\n\nContent Type: {'Template' if is_template else 'Custom Content'}"
-            evaluation = super().get_output()
-            
-            # Try to extract JSON from the response
-            json_data = self._extract_json_from_text(evaluation)
-            
-            if json_data and isinstance(json_data, dict):
-                # Successfully parsed JSON
-                # Ensure all required fields are present
-                criteria = ["Educational Value", "Comprehensiveness", "Technical Accuracy", 
-                           "Organization & Structure", "Language & Readability"]
-                
-                scores = json_data.get("scores", {})
-                for criterion in criteria:
-                    if criterion not in scores:
-                        scores[criterion] = 3 if is_template else 5
-                
-                # Calculate average score
-                average_score = sum(scores.values()) / len(scores)
-                
-                # Handle template detection
-                llm_is_template = json_data.get("is_template", is_template)
-                llm_template_confidence = json_data.get("template_confidence", template_confidence)
-                
-                # Use the higher confidence template detection between our method and LLM
-                final_is_template = llm_is_template or is_template
-                final_template_confidence = max(template_confidence, llm_template_confidence)
-                
-                # Apply template penalty to scores if it's a template
-                if final_is_template:
-                    penalty_factor = 0.7  # 30% penalty for templates
-                    scores = {k: max(1, v * penalty_factor) for k, v in scores.items()}
-                    average_score *= penalty_factor
-                
-                return {
-                    "file": file_path,
-                    "status": "Evaluated",
-                    "scores": scores,
-                    "average_score": average_score,
-                    "feedback": json_data.get("feedback", "No feedback provided"),
-                    "strengths": json_data.get("strengths", []),
-                    "weaknesses": json_data.get("weaknesses", []),
-                    "is_template": final_is_template,
-                    "template_confidence": final_template_confidence,
-                    "raw_evaluation": evaluation
-                }
-            else:
-                # Could not parse JSON, create reasonable default scores
-                scores = {}
-                for criterion in ["Educational Value", "Comprehensiveness", "Technical Accuracy", 
-                                "Organization & Structure", "Language & Readability"]:
-                    # Lower scores for templates
-                    base_score = 3 if is_template else 6
-                    variation = 2  # +/- 2 points of variation
-                    scores[criterion] = max(1, min(10, base_score + (hash(file_path + criterion) % (2*variation+1) - variation)))
-                
-                average_score = sum(scores.values()) / len(scores)
-                
-                return {
-                    "file": file_path,
-                    "status": "Evaluated",
-                    "scores": scores,
-                    "average_score": average_score,
-                    "feedback": "Content evaluation completed. " + ("This appears to be a template or placeholder rather than complete content." if is_template else ""),
-                    "strengths": [],
-                    "weaknesses": ["Could not parse structured evaluation"] + (["Content is just a template"] if is_template else []),
-                    "is_template": is_template,
-                    "template_confidence": template_confidence,
-                    "raw_evaluation": evaluation
-                }
-        except Exception as e:
-            # Log the exception for debugging
-            print(f"Error evaluating {file_path}: {str(e)}")
-            
-            criteria = ["Educational Value", "Comprehensiveness", "Technical Accuracy", 
-                      "Organization & Structure", "Language & Readability"]
-            
+        if not content:
             return {
                 "file": file_path,
                 "status": "Error",
-                "reason": f"Evaluation error: {str(e)}",
-                "scores": {criterion: 5 for criterion in criteria},
-                "average_score": 5,
-                "feedback": f"Error during evaluation: {str(e)}",
-                "is_template": is_template,
-                "template_confidence": template_confidence,
-                "raw_evaluation": ""
+                "reason": "File not found or empty",
+                "average_score": 0,
+                "scores": {},
+                "is_template": True,
+                "feedback": "File could not be read"
             }
+        
+        is_short = self._is_short_content_file(file_path, content)
+        content_preview = content[:2500] + "..." if len(content) > 2500 else content
+        
+        for attempt in range(2):
+            try:
+                if is_short:
+                    prompt = self.short_content_template.format(
+                        file_name=file_path, content=content_preview
+                    )
+                elif attempt == 0:
+                    prompt = self.basic_prompt_template.format(
+                        file_name=file_path, content=content_preview
+                    )
+                else:
+                    prompt = f"Evaluate: {file_path}\nContent: {content_preview[:1500]}\nJSON format required with is_template, scores, average_score, feedback."
+                
+                self.context = prompt
+                response = super().get_output()
+                
+                json_data = self._extract_json_from_response(response)
+                if json_data:
+                    validated_data = self._validate_scores(json_data)
+                    if validated_data:
+                        return {"file": file_path, "status": "Evaluated", **validated_data}
+                
+                if attempt == 0 and not is_short:
+                    continue
+                elif is_short:
+                    break
+            except Exception as e:
+                if attempt == 0 and not is_short:
+                    continue
+                pass
+        
+        return self._emergency_fallback(file_path, content, is_short)
+    
+    def _emergency_fallback(self, file_path, content, is_short_content):
+        content_lower = content.lower()
+        template_phrases = [
+            "write the aim", "add your", "enter your", "experiment name", 
+            "discipline name", "lab name", "please fill"
+        ]
+        
+        is_template = any(phrase in content_lower for phrase in template_phrases)
+        
+        if is_short_content:
+            return {
+                "file": file_path,
+                "status": "Evaluated",
+                "average_score": 5.0 if not is_template else 2.0,
+                "scores": {},
+                "is_template": is_template,
+                "is_short_content": True,
+                "feedback": "Emergency fallback: Short content evaluation"
+            }
+        
+        word_count = len(content.split())
+        base_score = 2 if is_template else (3 if word_count < 20 else (5 if word_count < 100 else 6))
+        
+        scores = {
+            "Educational Value": base_score,
+            "Completeness": base_score,
+            "Accuracy": base_score + 1,
+            "Organization": base_score,
+            "Clarity": base_score
+        }
+        
+        return {
+            "file": file_path,
+            "status": "Evaluated",
+            "average_score": base_score,
+            "scores": scores,
+            "is_template": is_template,
+            "is_short_content": False,
+            "feedback": "Emergency fallback evaluation"
+        }
+    
+    def _find_content_files(self):
+        content_files = []
+        
+        priority_files = [
+            "README.md", "experiment/aim.md", "experiment/theory.md", 
+            "experiment/procedure.md", "experiment/references.md",
+            "experiment/experiment-name.md", "experiment/contributors.md"
+        ]
+        
+        for file_path in priority_files:
+            full_path = os.path.join(self.repo_path, file_path)
+            if os.path.exists(full_path) and os.path.isfile(full_path):
+                content_files.append(file_path)
+        
+        experiment_dir = os.path.join(self.repo_path, "experiment")
+        if os.path.exists(experiment_dir):
+            for root, dirs, files in os.walk(experiment_dir):
+                for file in files:
+                    if file.lower().endswith('.md'):
+                        relative_path = os.path.relpath(os.path.join(root, file), self.repo_path)
+                        
+                        parts = os.path.normpath(relative_path).split(os.sep)
+                        if 'simulation' in parts or 'images' in parts:
+                            continue
+                        
+                        if relative_path not in content_files:
+                            try:
+                                file_size = os.path.getsize(os.path.join(root, file))
+                                if file_size < 1024 * 1024:
+                                    content_files.append(relative_path)
+                            except:
+                                continue
+        
+        return content_files
     
     def get_output(self):
+        content_files = self._find_content_files()
+        
+        if not content_files:
+            return {
+                "average_score": 0,
+                "file_evaluations": {},
+                "total_files": 0,
+                "evaluated_count": 0,
+                "template_count": 0,
+                "template_percentage": 0,
+                "short_content_count": 0,
+                "status": "No content files found"
+            }
+        
         file_evaluations = {}
         total_score = 0
         evaluated_count = 0
         template_count = 0
+        short_content_count = 0
         
-        for file_path in self.content_files:
-            evaluation = self._evaluate_file_content(file_path)
+        for file_path in content_files:
+            evaluation = self._evaluate_single_file(file_path)
             file_evaluations[file_path] = evaluation
             
-            if evaluation["status"] == "Evaluated":
-                total_score += evaluation["average_score"]
+            if evaluation['status'] == "Evaluated":
+                total_score += evaluation['average_score']
                 evaluated_count += 1
                 
-                if evaluation.get("is_template", False):
+                if evaluation.get('is_template', False):
                     template_count += 1
+                
+                if evaluation.get('is_short_content', False):
+                    short_content_count += 1
         
         average_score = total_score / evaluated_count if evaluated_count > 0 else 0
-        
-        # Apply a penalty to the overall score based on the percentage of templates
-        template_percentage = template_count / evaluated_count if evaluated_count > 0 else 0
-        template_penalty = template_percentage * 0.3  # Up to 30% penalty if all files are templates
-        
-        penalized_score = average_score * (1 - template_penalty)
+        template_percentage = (template_count / evaluated_count * 100) if evaluated_count > 0 else 0
         
         return {
+            "average_score": round(average_score, 1),
             "file_evaluations": file_evaluations,
-            "average_score": penalized_score,
-            "raw_average_score": average_score,
-            "template_percentage": template_percentage * 100,  # Convert to percentage
-            "template_count": template_count,
+            "total_files": len(content_files),
             "evaluated_count": evaluated_count,
-            "evaluation_summary": "Based on the evaluation of content files, the overall quality is " +
-                                 ("excellent" if penalized_score > 8 else 
-                                  "good" if penalized_score > 6 else 
-                                  "satisfactory" if penalized_score > 4 else "poor") +
-                                 (f" ({template_count} of {evaluated_count} files appear to be templates)" if template_count > 0 else ""),
-            "files_evaluated": evaluated_count,
-            "files_missing": len(self.content_files) - evaluated_count
+            "template_count": template_count,
+            "template_percentage": round(template_percentage, 1),
+            "short_content_count": short_content_count,
+            "status": f"Evaluated {evaluated_count}/{len(content_files)} content files"
         }

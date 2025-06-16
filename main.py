@@ -9,6 +9,7 @@ from Agents.StructureComplianceAgent import StructureComplianceAgent
 from Agents.ContentEvaluationAgent import ContentEvaluationAgent
 from Agents.SimulationEvaluationAgent import SimulationEvaluationAgent
 from Agents.ScoreCalculationAgent import ScoreCalculationAgent
+from Agents.RepositoryAgent import RepositoryAgent
 from config_loader import load_config
 
 # Load the configuration
@@ -110,7 +111,6 @@ class QAPipeline:
         
         # Step 1: Repository analysis first
         try:
-            from Agents.RepositoryAgent import RepositoryAgent
             repo_agent = RepositoryAgent(repo_path=self.temp_dir, repo_url=self.repo_url)
             repo_agent.skip_enhancement = True
             repo_agent.set_llm(self.llm)
@@ -164,17 +164,18 @@ class QAPipeline:
         
         # Remove acknowledgment lines
         lines = report_text.split('\n')
-        filtered_lines = []
+        # filtered_lines = []
         
-        for line in lines:
-            # Skip lines that look like acknowledgments
-            if any(phrase in line.lower() for phrase in [
-                "i will", "okay,", "sure,", "here's", "here is", "as requested"
-            ]) and len(line) < 100:  # Usually acknowledgments are short
-                continue
-            filtered_lines.append(line)
+        # for line in lines:
+        #     # Skip lines that look like acknowledgments
+        #     if any(phrase in line.lower() for phrase in [
+        #         "i will", "okay,", "sure,", "here's", "here is", "as requested"
+        #     ]) and len(line) < 100:  # Usually acknowledgments are short
+        #         continue
+        #     filtered_lines.append(line)
         
-        return '\n'.join(filtered_lines)
+        # return '\n'.join(filtered_lines)
+        return '\n'.join(lines)
     
     def get_report(self):
         """Return the cleaned detailed evaluation report"""
