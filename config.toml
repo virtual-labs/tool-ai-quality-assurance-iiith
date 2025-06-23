@@ -27,3 +27,8 @@ template_penalty = 0.3
 good_score = 8.0
 satisfactory_score = 5.0
 minimum_content_length = 50
+
+[content_evaluation]
+template_repo_url = "https://github.com/virtual-labs/ph3-exp-template"
+template_similarity_threshold = 0.7
+enable_template_comparison = true
