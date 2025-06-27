@@ -7,3 +7,5 @@ gitpython
 dotenv
 numpy
 toml
+playwright==1.42.0
+nest-asyncio

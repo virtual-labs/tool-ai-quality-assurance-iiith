@@ -51,11 +51,13 @@ class ScoreCalculationAgent(BaseAgent):
         structure_weight = self.custom_weights["structure"]
         content_weight = self.custom_weights["content"]  
         simulation_weight = self.custom_weights["simulation"]
+        browser_weight = self.custom_weights.get("browser_testing", 0.15)
         
         # Extract scores
         structure_score = self.evaluation_results.get('structure', {}).get('compliance_score', 0)
         content_score = self.evaluation_results.get('content', {}).get('average_score', 0)
         simulation_score = self.evaluation_results.get('simulation', {}).get('overall_score', 0)
+        browser_score = self.evaluation_results.get('browser_testing', {}).get('browser_score', 0)
         
         # Get experiment name
         experiment_name = "Virtual Lab Experiment"
@@ -68,21 +70,24 @@ class ScoreCalculationAgent(BaseAgent):
         final_score = (
             structure_score * structure_weight * 10 +
             content_score * content_weight * 10 +
-            simulation_score * simulation_weight * 10
+            simulation_score * simulation_weight * 10 +
+            browser_score * browser_weight * 10
         )
         
         # Gather data
         structure_data = self.evaluation_results.get('structure', {})
         content_data = self.evaluation_results.get('content', {})
         simulation_data = self.evaluation_results.get('simulation', {})
+        browser_data = self.evaluation_results.get('browser_testing', {})
         
-        # Create direct prompt WITHOUT weight information
+        # UPDATED: Create direct prompt WITH browser testing information
         direct_prompt = f"""Write a quality assessment report for the Virtual Lab experiment: {experiment_name}
 
 EVALUATION DATA:
 Structure Score: {structure_score}/10 - Status: {structure_data.get('structure_status', 'Unknown')}
 Content Score: {content_score}/10 - Files: {content_data.get('evaluated_count', 0)}/{content_data.get('total_files', 0)} - Templates: {content_data.get('template_count', 0)}
 Simulation Score: {simulation_score}/10 - Status: {simulation_data.get('simulation_status', 'Unknown')} - Complexity: {simulation_data.get('complexity', 0)}/10
+Browser Testing Score: {browser_score}/10 - Status: {browser_data.get('status', 'Unknown')} - Tests: {browser_data.get('passed_tests', 0)}/{browser_data.get('total_tests', 0)} passed
 
 Final Score: {final_score:.1f}/100
 
@@ -97,6 +102,7 @@ Brief overview with overall score of {final_score:.1f}/100.
 ### Structure Evaluation: {structure_score * 10:.1f}/100
 ### Content Evaluation: {content_score * 10:.1f}/100  
 ### Simulation Evaluation: {simulation_score * 10:.1f}/100
+### Browser Testing: {browser_score * 10:.1f}/100
 
 ## Strengths
 - List key positive aspects
@@ -140,6 +146,7 @@ Final assessment and next steps."""
             if clean_lines:
                 report = '\n'.join(clean_lines)
             else:
+                # UPDATED: Fallback report includes browser testing
                 report = f"""# Virtual Lab Quality Report: {experiment_name}
 
 ## Executive Summary
@@ -149,9 +156,10 @@ Overall Quality Score: {final_score:.1f}/100
 - Structure: {structure_score * 10:.1f}/100
 - Content: {content_score * 10:.1f}/100  
 - Simulation: {simulation_score * 10:.1f}/100
+- Browser Testing: {browser_score * 10:.1f}/100
 
 ## Assessment
-This Virtual Lab has been evaluated across structure, content, and simulation components.
+This Virtual Lab has been evaluated across structure, content, simulation, and browser functionality components.
 
 ## Recommendations
 Based on the evaluation, improvements are needed in areas scoring below 70/100."""
@@ -162,12 +170,14 @@ Based on the evaluation, improvements are needed in areas scoring below 70/100."
 
 Final Score: {final_score:.1f}/100"""
     
+        # UPDATED: Return includes browser testing component
         return {
             "final_score": final_score,
             "component_scores": {
                 "structure": structure_score * 10,
                 "content": content_score * 10,
-                "simulation": simulation_score * 10
+                "simulation": simulation_score * 10,
+                "browser_testing": browser_score * 10
             },
             "weights_used": self.custom_weights.copy(),
             "report": report,

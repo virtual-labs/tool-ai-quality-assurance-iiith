@@ -5,6 +5,7 @@ import re
 import subprocess
 from git import Repo, GitCommandError
 from langchain_google_genai import ChatGoogleGenerativeAI
+from Agents.PlaywrightTestingAgent import PlaywrightTestingAgent
 from Agents.StructureComplianceAgent import StructureComplianceAgent
 from Agents.ContentEvaluationAgent import ContentEvaluationAgent
 from Agents.SimulationEvaluationAgent import SimulationEvaluationAgent
@@ -141,8 +142,23 @@ class QAPipeline:
         simulation_agent.set_llm(self.llm)
         simulation_results = simulation_agent.get_output()
         self.evaluation_results['simulation'] = simulation_results
+
+        # Step 5: Browser functionality testing  
+        try:
+            playwright_agent = PlaywrightTestingAgent(self.temp_dir)
+            playwright_agent.set_llm(self.llm)
+            playwright_results = playwright_agent.get_output()
+            self.evaluation_results['browser_testing'] = playwright_results
+        except Exception as e:
+            print(f"Warning: Browser testing failed: {str(e)}")
+            self.evaluation_results['browser_testing'] = {
+                "browser_score": 0,
+                "status": "ERROR",
+                "message": f"Browser testing failed: {str(e)}"
+            }
+
     
-        # Step 5: Generate final report with custom weights
+        # Step 6: Generate final report with custom weights
         score_agent = ScoreCalculationAgent(self.evaluation_results, self.weights)
         score_agent.set_llm(self.llm)
         score_results = score_agent.get_output()
