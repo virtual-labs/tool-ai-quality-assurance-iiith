@@ -270,14 +270,14 @@ if st.session_state.evaluation_complete and st.session_state.results:
     score_color = "red" if results['final_score'] < 60 else ("orange" if results['final_score'] < 80 else "green")
     st.markdown(f"<h2 style='color:{score_color}'>Score: {results['final_score']:.1f}/100</h2>", unsafe_allow_html=True)
     
-    # UPDATED: Add 5th tab for Browser Testing
+    # UPDATED: Added 5th tab for Browser Testing
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Content Evaluation", "Simulation Evaluation", "Browser Testing", "Full Report"])
     
     with tab1:
         col1, col2 = st.columns([2, 3])
         
         with col1:
-            # Create a bar chart for category scores
+            # Created a bar chart for category scores
             categories = []
             scores = []
             

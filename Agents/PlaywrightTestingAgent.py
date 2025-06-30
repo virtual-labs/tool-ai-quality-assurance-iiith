@@ -47,8 +47,8 @@ Return a JSON with test scenarios:
         self.repo_path = repo_path
         self.simulation_url = None
         self.test_results = {}
-        self.screenshots = {}  # NEW: Store screenshots with base64 encoding
-        self.execution_timeline = []  # NEW: Track test execution timeline
+        self.screenshots = {}  # Store screenshots with base64 encoding
+        self.execution_timeline = []  # Track test execution timeline
         self.httpd = None
         super().__init__(
             self.role,
@@ -70,51 +70,155 @@ Return a JSON with test scenarios:
         import socketserver
         import threading
         import time
-        from functools import partial
+        import os
         
         sim_path = os.path.join(self.repo_path, "experiment", "simulation")
         if not os.path.exists(sim_path):
+            print(f"❌ Simulation directory not found: {sim_path}")
+            return None
+        
+        # Check if index.html exists and is a file (not directory)
+        index_file = os.path.join(sim_path, "index.html")
+        if not os.path.exists(index_file):
+            print(f"❌ index.html not found in {sim_path}")
+            # List what files are actually there
+            try:
+                files = os.listdir(sim_path)
+                print(f"📁 Files in simulation directory: {files}")
+            except:
+                pass
+            return None
+        
+        if not os.path.isfile(index_file):
+            print(f"❌ index.html exists but is not a file: {index_file}")
             return None
         
         try:
             # Find a free port
             port = self._find_free_port()
+            print(f"🌐 Starting server on port {port}")
             
-            # Create a custom handler that serves from the simulation directory
-            class CustomHandler(http.server.SimpleHTTPRequestHandler):
-                def __init__(self, *args, directory=None, **kwargs):
-                    self.directory = directory
-                    super().__init__(*args, **kwargs)
+            # Create a robust handler that forces index.html serving
+            class ForceIndexHandler(http.server.SimpleHTTPRequestHandler):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, directory=sim_path, **kwargs)
                 
-                def translate_path(self, path):
-                    # Override to serve from our simulation directory
-                    path = super().translate_path(path)
-                    # Replace the default serve directory with our simulation directory
-                    rel_path = os.path.relpath(path, os.getcwd())
-                    return os.path.join(self.directory, rel_path)
+                def end_headers(self):
+                    # Add headers to prevent caching
+                    self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                    self.send_header('Pragma', 'no-cache')
+                    self.send_header('Expires', '0')
+                    super().end_headers()
+                
+                def do_GET(self):
+                    # Force serve index.html for root requests
+                    if self.path == '/' or self.path == '' or self.path == '/index.html':
+                        try:
+                            # Read and serve index.html directly
+                            with open(index_file, 'rb') as f:
+                                content = f.read()
+                            
+                            self.send_response(200)
+                            self.send_header('Content-type', 'text/html')
+                            self.send_header('Content-length', str(len(content)))
+                            self.end_headers()
+                            self.wfile.write(content)
+                            return
+                        except Exception as e:
+                            print(f"❌ Error serving index.html: {e}")
+                            self.send_response(500)
+                            self.end_headers()
+                            return
+                    
+                    # For other files, use default handling but from simulation directory
+                    try:
+                        # Remove leading slash and resolve path
+                        file_path = self.path.lstrip('/')
+                        full_path = os.path.join(sim_path, file_path)
+                        
+                        if os.path.exists(full_path) and os.path.isfile(full_path):
+                            with open(full_path, 'rb') as f:
+                                content = f.read()
+                            
+                            # Determine content type
+                            if file_path.endswith('.css'):
+                                content_type = 'text/css'
+                            elif file_path.endswith('.js'):
+                                content_type = 'application/javascript'
+                            elif file_path.endswith(('.png', '.jpg', '.jpeg')):
+                                content_type = 'image/*'
+                            else:
+                                content_type = 'text/plain'
+                            
+                            self.send_response(200)
+                            self.send_header('Content-type', content_type)
+                            self.send_header('Content-length', str(len(content)))
+                            self.end_headers()
+                            self.wfile.write(content)
+                            return
+                        else:
+                            # File not found
+                            self.send_response(404)
+                            self.send_header('Content-type', 'text/html')
+                            self.end_headers()
+                            self.wfile.write(b'File not found')
+                            return
+                            
+                    except Exception as e:
+                        print(f"❌ Error serving file {self.path}: {e}")
+                        self.send_response(500)
+                        self.end_headers()
+                        return
                 
                 def log_message(self, format, *args):
-                    # Suppress server logs to reduce noise
-                    pass
-            
-            # Create handler with simulation directory
-            handler = partial(CustomHandler, directory=sim_path)
+                    # Print detailed logs for debugging
+                    print(f"🌐 Server request: {format % args}")
             
             # Create server
-            self.httpd = socketserver.TCPServer(("", port), handler)
+            self.httpd = socketserver.TCPServer(("", port), ForceIndexHandler)
+            print(f"✅ Server created successfully on port {port}")
             
             # Start server in background thread
             server_thread = threading.Thread(target=self.httpd.serve_forever)
             server_thread.daemon = True
             server_thread.start()
+            print(f"✅ Server thread started")
             
             self.simulation_url = f"http://localhost:{port}"
-            time.sleep(1.5)  # Give server more time to start
-            return self.simulation_url
+            time.sleep(2)  # Give server time to start
             
+            # Test the server with detailed error reporting
+            print(f"🧪 Testing server at {self.simulation_url}")
+            try:
+                import urllib.request
+                with urllib.request.urlopen(self.simulation_url, timeout=10) as response:
+                    content = response.read().decode('utf-8', errors='ignore')
+                    status_code = response.getcode()
+                    
+                    print(f"📊 Server response: Status {status_code}")
+                    print(f"📄 Content preview (first 200 chars): {content[:200]}")
+                    
+                    if status_code == 200:
+                        # Check if we got HTML content (not directory listing)
+                        if '<html' in content.lower() and 'directory listing for' not in content.lower():
+                            print(f"✅ Server successfully serving simulation at {self.simulation_url}")
+                            return self.simulation_url
+                        else:
+                            print(f"❌ Server serving directory listing instead of index.html")
+                            print(f"📄 Full content: {content}")
+                            return None
+                    else:
+                        print(f"❌ Server returned status {status_code}")
+                        return None
+            except Exception as test_error:
+                print(f"❌ Server test failed: {test_error}")
+                return None
+                
         except Exception as e:
-            print(f"Failed to start server: {e}")
+            print(f"❌ Failed to start server: {e}")
             return None
+
+
     
     def _stop_local_server(self):
         """Stop the local HTTP server"""
@@ -228,7 +332,7 @@ Return a JSON with test scenarios:
             return False
     
     async def _run_basic_tests(self, page, test_plan):
-        """Run basic functionality tests with screenshot capture"""
+        """Run basic functionality tests with better content waiting"""
         results = []
         
         for test in test_plan.get("basic_tests", []):
@@ -236,38 +340,86 @@ Return a JSON with test scenarios:
             
             try:
                 if test["name"] == "page_load":
-                    # Check if page loads without errors
-                    response = await page.goto(self.simulation_url, wait_until='domcontentloaded', timeout=15000)
+                    # Navigate with better waiting strategy
+                    response = await page.goto(
+                        self.simulation_url, 
+                        wait_until='domcontentloaded',  # Wait for DOM to be ready
+                        timeout=15000
+                    )
+                    
+                    # Wait for the page to be actually ready
+                    await page.wait_for_timeout(3000)  # Give JavaScript time to execute
+                    
+                    # Try to wait for common elements that indicate content is loaded
+                    try:
+                        # Wait for ANY visible element (body with content)
+                        await page.wait_for_function(
+                            "document.body && document.body.innerHTML.trim().length > 100",
+                            timeout=5000
+                        )
+                    except:
+                        # If no substantial content, wait for basic body
+                        await page.wait_for_selector("body", timeout=5000)
+                    
+                    # Wait for any images to load
+                    try:
+                        await page.wait_for_load_state('networkidle', timeout=5000)
+                    except:
+                        pass  # Continue if network isn't idle
+                    
                     title = await page.title()
                     
-                    # Capture initial page load screenshot
-                    await self._capture_screenshot(page, "initial_page_load", "Initial page load state")
+                    # Capture initial page load screenshot AFTER content loads
+                    await self._capture_screenshot(page, "initial_page_load", "Initial page load state with content")
                     
-                    # Wait for any dynamic content
+                    # Wait a bit more for any dynamic content
                     await page.wait_for_timeout(2000)
                     
-                    # Capture after dynamic content loads
-                    await self._capture_screenshot(page, "page_fully_loaded", "Page after dynamic content loading")
+                    # Check if we have actual content
+                    content_length = await page.evaluate("document.body.innerHTML.length")
+                    has_content = content_length > 100
                     
-                    status = "PASS" if response and response.status < 400 and title else "FAIL"
+                    # Capture after ensuring content is present
+                    await self._capture_screenshot(page, "page_fully_loaded", f"Page after content loading ({content_length} chars)")
+                    
+                    status = "PASS" if response and response.status < 400 and title and has_content else "FAIL"
+                    details = f"Page title: '{title}', HTTP Status: {response.status if response else 'No response'}, Content: {content_length} chars"
+                    
                     results.append({
                         "test": "page_load",
                         "status": status,
-                        "details": f"Page title: '{title}', HTTP Status: {response.status if response else 'No response'}",
+                        "details": details,
                         "execution_time": round(asyncio.get_event_loop().time() - start_time, 2)
                     })
                 
                 elif test["name"] == "ui_elements":
-                    # Check if basic UI elements exist
-                    buttons = await page.query_selector_all("button")
-                    inputs = await page.query_selector_all("input")
+                    # Wait for interactive elements to be available
+                    await page.wait_for_timeout(2000)  # Give time for elements to render
+                    
+                    # Try to wait for common interactive elements
+                    try:
+                        await page.wait_for_function(
+                            """() => {
+                                const buttons = document.querySelectorAll('button, input[type="button"], input[type="submit"]');
+                                const inputs = document.querySelectorAll('input, select, textarea');
+                                const canvas = document.querySelectorAll('canvas');
+                                return buttons.length > 0 || inputs.length > 0 || canvas.length > 0;
+                            }""",
+                            timeout=5000
+                        )
+                    except:
+                        pass  # Continue even if no interactive elements found
+                    
+                    # Count all interactive elements
+                    buttons = await page.query_selector_all("button, input[type='button'], input[type='submit']")
+                    inputs = await page.query_selector_all("input, select, textarea")
                     selects = await page.query_selector_all("select")
                     canvas = await page.query_selector_all("canvas")
                     
                     # Capture UI elements screenshot
-                    await self._capture_screenshot(page, "ui_elements_detection", "UI elements identification")
+                    await self._capture_screenshot(page, "ui_elements_detection", "UI elements identification after waiting")
                     
-                    total_interactive = len(buttons) + len(inputs) + len(selects) + len(canvas)
+                    total_interactive = len(buttons) + len(inputs) + len(canvas)
                     
                     status = "PASS" if total_interactive > 0 else "FAIL"
                     results.append({
@@ -286,6 +438,7 @@ Return a JSON with test scenarios:
                 })
         
         return results
+
     
     async def _run_interaction_tests(self, page, test_plan):
         """Run interaction tests with screenshot capture"""
