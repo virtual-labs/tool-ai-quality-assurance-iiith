@@ -5,6 +5,7 @@ import re
 import subprocess
 from git import Repo, GitCommandError
 from langchain_google_genai import ChatGoogleGenerativeAI
+from Agents.PlaywrightTestingAgent import PlaywrightTestingAgent
 from Agents.StructureComplianceAgent import StructureComplianceAgent
 from Agents.ContentEvaluationAgent import ContentEvaluationAgent
 from Agents.SimulationEvaluationAgent import SimulationEvaluationAgent
@@ -126,22 +127,35 @@ class QAPipeline:
             return False, f"Content evaluation failed: {str(e)}"
     
         # Step 4: Simulation evaluation
+        simulation_agent = SimulationEvaluationAgent(self.temp_dir)
+        simulation_agent.skip_enhancement = True
+        simulation_agent.set_llm(self.llm)
+        simulation_results = simulation_agent.get_output()
+        self.evaluation_results['simulation'] = simulation_results
+
+        # Step 5: Browser functionality testing  
         try:
-            simulation_agent = SimulationEvaluationAgent(self.temp_dir)
-            simulation_agent.set_llm(self.llm)
-            simulation_results = simulation_agent.get_output()
-            self.evaluation_results['simulation'] = simulation_results
+            playwright_agent = PlaywrightTestingAgent(self.temp_dir)
+            playwright_agent.set_llm(self.llm)
+            playwright_results = playwright_agent.get_output()
+            self.evaluation_results['browser_testing'] = playwright_results
         except Exception as e:
-            return False, f"Simulation evaluation failed: {str(e)}"
+            print(f"Warning: Browser testing failed: {str(e)}")
+            self.evaluation_results['browser_testing'] = {
+                "browser_score": 0,
+                "status": "ERROR",
+                "message": f"Browser testing failed: {str(e)}"
+            }
+
     
-        # Step 5: Score calculation and report generation
-        try:
-            score_agent = ScoreCalculationAgent(self.evaluation_results, self.custom_weights)
-            score_agent.set_llm(self.llm)
-            final_results = score_agent.get_output()
-            self.evaluation_results.update(final_results)
-        except Exception as e:
-            return False, f"Score calculation failed: {str(e)}"
+        # Step 6: Generate final report with custom weights
+        score_agent = ScoreCalculationAgent(self.evaluation_results, self.weights)
+        score_agent.set_llm(self.llm)
+        score_results = score_agent.get_output()
+        
+        self.final_score = score_results['final_score']
+        self.report = score_results['report']
+
         
         return True, "Evaluation completed successfully."
     
