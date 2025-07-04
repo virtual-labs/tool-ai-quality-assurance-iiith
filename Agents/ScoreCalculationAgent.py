@@ -1,82 +1,87 @@
 import os
 import tempfile
 import subprocess
+import json
+import re
 from BaseAgent import BaseAgent
 
 class ScoreCalculationAgent(BaseAgent):
+    role = "Score Calculator and Report Generator"
+    
+    basic_prompt_template = """
+You are a quality assessment report generator for Virtual Labs experiments.
+
+Generate a comprehensive quality assessment report based on the evaluation data provided.
+
+The report should be in markdown format and include:
+1. Executive summary with overall score
+2. Component analysis for each evaluated area
+3. Strengths and areas for improvement
+4. Specific recommendations
+5. Conclusion
+
+Focus on actionable insights and specific improvements needed.
+"""
+    
     def __init__(self, evaluation_results, custom_weights=None):
         self.evaluation_results = evaluation_results
-        self.custom_weights = custom_weights or {"structure": 0.25, "content": 0.5, "simulation": 0.25}
         
+        # Updated default weights (removed simulation, enhanced browser testing)
+        default_weights = {
+            "structure": 0.3,
+            "content": 0.4,
+            "browser_testing": 0.3
+        }
+        
+        if custom_weights:
+            # Normalize weights
+            total = sum(custom_weights.values())
+            self.custom_weights = {k: v/total for k, v in custom_weights.items()}
+        else:
+            self.custom_weights = default_weights
+            
         super().__init__(
-            role="Score Calculation Agent",
-            basic_prompt="Calculate final scores based on evaluation results",
+            self.role,
+            basic_prompt=self.basic_prompt_template,
             context=""
         )
-    
-    def _count_template_files(self):
-        """Count how many content files are templates"""
-        if 'content' not in self.evaluation_results:
-            return 0, 0, 0
-            
-        content_results = self.evaluation_results['content']
-        file_evaluations = content_results.get('file_evaluations', {})
-        
-        template_count = 0
-        total_evaluated = 0
-        
-        for _, evaluation in file_evaluations.items():
-            if evaluation['status'] == 'Evaluated':
-                total_evaluated += 1
-                if evaluation.get('is_template', False):
-                    template_count += 1
-                    
-        template_percentage = (template_count / total_evaluated * 100) if total_evaluated > 0 else 0
-        
-        return template_count, total_evaluated, template_percentage
-    
+
     def get_output(self):
-        # Use custom weights instead of config weights
+        # Use custom weights
         structure_weight = self.custom_weights["structure"]
         content_weight = self.custom_weights["content"]  
-        simulation_weight = self.custom_weights["simulation"]
-        browser_weight = self.custom_weights.get("browser_testing", 0.15)
+        browser_weight = self.custom_weights["browser_testing"]
         
-        # Extract scores
+        # Extract scores - browser testing replaces simulation
         structure_score = self.evaluation_results.get('structure', {}).get('compliance_score', 0)
         content_score = self.evaluation_results.get('content', {}).get('average_score', 0)
-        simulation_score = self.evaluation_results.get('simulation', {}).get('overall_score', 0)
         browser_score = self.evaluation_results.get('browser_testing', {}).get('browser_score', 0)
 
-        
         # Get experiment name from repository results
         experiment_name = "Virtual Lab Experiment"
         if 'repository' in self.evaluation_results:
             repo_data = self.evaluation_results['repository']
             if 'experiment_name' in repo_data and repo_data['experiment_name']:
                 experiment_name = repo_data['experiment_name']
-    
-        # Calculate final score with custom weights
+
+        # Calculate final score with updated weights
         final_score = (
             structure_score * structure_weight * 10 +
             content_score * content_weight * 10 +
-            simulation_score * simulation_weight * 10 +
             browser_score * browser_weight * 10
         )
         
         # Gather data
         structure_data = self.evaluation_results.get('structure', {})
         content_data = self.evaluation_results.get('content', {})
-        simulation_data = self.evaluation_results.get('simulation', {})
         browser_data = self.evaluation_results.get('browser_testing', {})
         
-        # UPDATED: Create direct prompt WITH browser testing information
+        # Create comprehensive prompt
         direct_prompt = f"""Write a quality assessment report for the Virtual Lab experiment: {experiment_name}
 
 EVALUATION DATA:
 Structure Score: {structure_score}/10 - Status: {structure_data.get('structure_status', 'Unknown')}
 Content Score: {content_score}/10 - Files: {content_data.get('evaluated_count', 0)}/{content_data.get('total_files', 0)} - Templates: {content_data.get('template_count', 0)}
-Simulation Score: {simulation_score}/10 - Status: {simulation_data.get('simulation_status', 'Unknown')} - Complexity: {simulation_data.get('complexity', 0)}/10
 Browser Testing Score: {browser_score}/10 - Status: {browser_data.get('status', 'Unknown')} - Tests: {browser_data.get('passed_tests', 0)}/{browser_data.get('total_tests', 0)} passed
 
 Final Score: {final_score:.1f}/100
@@ -91,7 +96,6 @@ Brief overview with overall score of {final_score:.1f}/100.
 ## Component Analysis
 ### Structure Evaluation: {structure_score * 10:.1f}/100
 ### Content Evaluation: {content_score * 10:.1f}/100  
-### Simulation Evaluation: {simulation_score * 10:.1f}/100
 ### Browser Testing: {browser_score * 10:.1f}/100
 
 ## Strengths
@@ -120,10 +124,8 @@ Final assessment and next steps."""
             repo_data = self.evaluation_results['repository']
             enhanced_overview = repo_data.get('enhanced_overview', repo_data.get('experiment_overview', ''))
             learning_objectives = repo_data.get('learning_objectives', [])
-        
-        
+
         try:
-            self.context = report_prompt
             report_response = super().get_output()
             
             # Clean up the report
@@ -150,7 +152,7 @@ Final assessment and next steps."""
             if clean_lines:
                 report = '\n'.join(clean_lines)
             else:
-                # UPDATED: Fallback report includes browser testing
+                # Fallback report with browser testing
                 report = f"""# Virtual Lab Quality Report: {experiment_name}
 
 ## Executive Summary
@@ -159,40 +161,50 @@ Overall Quality Score: {final_score:.1f}/100
 ## Component Scores
 - Structure: {structure_score * 10:.1f}/100
 - Content: {content_score * 10:.1f}/100  
-- Simulation: {simulation_score * 10:.1f}/100
-- Browser Testing: {browser_score * 10:.1f}/100
+- Browser Testing: {browser_score:.1f}/100
 
 ## Assessment
-This Virtual Lab has been evaluated across structure, content, simulation, and browser functionality components.
+This Virtual Lab has been evaluated across structure, content, and browser functionality components.
 
 ## Recommendations
 Based on the evaluation, improvements are needed in areas scoring below 70/100."""
         
         except Exception as e:
             print(f"Error generating report: {str(e)}")
+            # Fallback report
             report = f"""# Virtual Lab Quality Report: {experiment_name}
 
 ## Executive Summary
 Overall Quality Score: {final_score:.1f}/100
 
-## Component Scores
-- Structure: {structure_score * 10:.1f}/100
-- Content: {content_score * 10:.1f}/100  
-- Simulation: {simulation_score * 10:.1f}/100
+## Component Analysis
+- **Structure**: {structure_score * 10:.1f}/100
+- **Content**: {content_score * 10:.1f}/100
+- **Browser Testing**: {browser_score:.1f}/100
 
-## Assessment
-This Virtual Lab has been evaluated across structure, content, and simulation components."""
-    
-        # UPDATED: Return includes browser testing component
+## Status
+Report generation encountered an error. Manual review recommended."""
+
         return {
-            "final_score": final_score,
-            "component_scores": {
-                "structure": structure_score * 10,
-                "content": content_score * 10,
-                "simulation": simulation_score * 10,
-                "browser_testing": browser_score * 10
+            'final_score': round(final_score, 1),
+            'component_scores': {
+                'structure': round(structure_score * 10, 1),
+                'content': round(content_score * 10, 1),
+                'browser_testing': round(browser_score, 1)
             },
-            "weights_used": self.custom_weights.copy(),
-            "report": report,
-            "experiment_name": experiment_name
+            'weights_used': self.custom_weights,
+            'report': report,
+            'experiment_name': experiment_name,
+            'template_files': template_count,
+            'total_content_files': total_evaluated,
+            'template_percentage': template_percentage
         }
+
+    def _count_template_files(self):
+        """Count template files from content evaluation"""
+        content_data = self.evaluation_results.get('content', {})
+        template_count = content_data.get('template_count', 0)
+        total_evaluated = content_data.get('evaluated_count', 0)
+        template_percentage = content_data.get('template_percentage', 0)
+        
+        return template_count, total_evaluated, template_percentage

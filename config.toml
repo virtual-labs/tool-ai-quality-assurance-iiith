@@ -16,10 +16,9 @@ max_tokens = 100000
 
 [weights]
 # Component weights for final score calculation (must sum to 1.0)
-structure = 0.20
+structure = 0.30
 content = 0.40
-simulation = 0.25
-browser_testing = 0.15
+browser_testing = 0.30
 
 [thresholds]
 # Minimum scores and penalties
