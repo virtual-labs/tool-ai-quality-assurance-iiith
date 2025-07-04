@@ -280,7 +280,7 @@ Return a JSON with test scenarios:
         }
     
     def _get_ai_test_plan(self, context):
-        """Get AI-generated test plan"""
+        """Get AI-generated test plan with fallback for quota issues"""
         try:
             prompt = self.test_planning_prompt.format(**context)
             self.context = prompt
@@ -290,49 +290,165 @@ Return a JSON with test scenarios:
             import re
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
+                print("✅ AI test plan generated successfully")
                 return json.loads(json_match.group(0))
         except Exception as e:
-            print(f"AI test planning failed: {e}")
+            print(f"⚠️ AI test planning failed: {e}")
+            
+            # Check if it's a quota issue
+            if "429" in str(e) or "quota" in str(e).lower() or "ResourceExhausted" in str(e):
+                print("🔄 Using enhanced fallback test plan due to API quota limits")
+                return self._get_enhanced_fallback_test_plan(context)
+            else:
+                print("🔄 Using basic fallback test plan due to other error")
         
-        # Fallback test plan
+        # Basic fallback test plan
+        return self._get_basic_fallback_test_plan()
+
+    def _get_enhanced_fallback_test_plan(self, context):
+        """Enhanced fallback test plan when AI is unavailable"""
+        interactive_elements = context.get('interactive_elements', '')
+        
+        # Analyze what elements we found to create smarter tests
+        has_buttons = 'buttons' in interactive_elements.lower()
+        has_inputs = 'inputs' in interactive_elements.lower()
+        has_canvas = 'canvas' in interactive_elements.lower()
+        has_forms = 'forms' in interactive_elements.lower()
+        
+        test_plan = {
+            "basic_tests": [
+                {"name": "page_load", "description": "Check if simulation loads properly"},
+                {"name": "ui_elements", "description": "Verify UI elements are visible"}
+            ],
+            "interaction_tests": [],
+            "visual_tests": [
+                {"name": "responsive_design", "description": "Test responsive design"},
+                {"name": "graph_display", "description": "Check for graphs and visual elements"}
+            ]
+        }
+        
+        # Add interaction tests based on detected elements
+        if has_buttons:
+            test_plan["interaction_tests"].append({
+                "name": "button_clicks", 
+                "selectors": ["button", ".btn", "input[type='button']", "input[type='submit']"], 
+                "description": "Test button functionality"
+            })
+        
+        if has_inputs:
+            test_plan["interaction_tests"].append({
+                "name": "input_fields", 
+                "selectors": ["input", "select", "textarea"], 
+                "description": "Test input field interactions"
+            })
+        
+        if has_canvas:
+            test_plan["interaction_tests"].append({
+                "name": "canvas_interaction", 
+                "selectors": ["canvas"], 
+                "description": "Test canvas element interactions"
+            })
+        
+        if has_forms:
+            test_plan["interaction_tests"].append({
+                "name": "form_interaction", 
+                "selectors": ["form"], 
+                "description": "Test form functionality"
+            })
+        
+        print(f"📋 Enhanced fallback test plan created: {len(test_plan['basic_tests'])} basic, {len(test_plan['interaction_tests'])} interaction, {len(test_plan['visual_tests'])} visual tests")
+        return test_plan
+
+    def _get_basic_fallback_test_plan(self):
+        """Basic fallback when AI and enhanced logic both fail"""
         return {
             "basic_tests": [
                 {"name": "page_load", "description": "Check if simulation loads properly"},
                 {"name": "ui_elements", "description": "Verify UI elements are visible"}
             ],
             "interaction_tests": [
-                {"name": "button_clicks", "selectors": ["button", "input[type='button']"], "description": "Test button functionality"},
-                {"name": "input_fields", "selectors": ["input"], "description": "Test input field interactions"}
+                {"name": "button_clicks", "selectors": ["button", "input[type='button']", ".btn"], "description": "Test button functionality"},
+                {"name": "input_fields", "selectors": ["input", "select", "textarea"], "description": "Test input field interactions"}
             ],
             "visual_tests": [
                 {"name": "responsive_design", "description": "Test responsive design"},
                 {"name": "graph_display", "description": "Check for graphs and visual elements"}
             ]
         }
+
     
     async def _capture_screenshot(self, page, test_name, description=""):
-        """Capture and store screenshot with base64 encoding"""
+        """Enhanced screenshot capture with better content detection"""
         try:
+            # Wait a bit before screenshot to ensure content is rendered
+            await page.wait_for_timeout(1000)
+            
+            # Check if page has visible content before screenshot
+            has_visible_content = await page.evaluate("""() => {
+                const body = document.body;
+                if (!body) return false;
+                
+                // Check if body has visible dimensions
+                const hasSize = body.offsetHeight > 50 && body.offsetWidth > 50;
+                
+                // Check for visible elements
+                const visibleElements = document.querySelectorAll('*');
+                let hasVisibleElement = false;
+                for (let elem of visibleElements) {
+                    const style = window.getComputedStyle(elem);
+                    if (style.display !== 'none' && style.visibility !== 'hidden' && elem.offsetHeight > 0) {
+                        hasVisibleElement = true;
+                        break;
+                    }
+                }
+                
+                return hasSize && hasVisibleElement;
+            }""")
+            
+            if not has_visible_content:
+                print(f"⚠️ Warning: No visible content detected for screenshot {test_name}")
+                # Wait a bit more and try again
+                await page.wait_for_timeout(2000)
+            
+            # Take screenshot with better options
             screenshot_bytes = await page.screenshot(
                 full_page=True,
-                animations='disabled',  # Disable animations for consistent screenshots
-                timeout=5000
+                animations='disabled',
+                timeout=10000,  # Increased timeout
+                clip=None,  # Full page
+                omit_background=False  # Include background
             )
+            
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+            
+            # Get page info for debugging
+            page_info = await page.evaluate("""() => {
+                return {
+                    url: window.location.href,
+                    title: document.title,
+                    bodyHTML: document.body ? document.body.innerHTML.length : 0,
+                    bodyText: document.body ? document.body.innerText.length : 0,
+                    hasVisibleContent: document.body && document.body.offsetHeight > 0
+                };
+            }""")
             
             self.screenshots[test_name] = {
                 "data": screenshot_b64,
-                "description": description,
-                "timestamp": asyncio.get_event_loop().time()
+                "description": f"{description} | Page: {page_info['title']} | Content: {page_info['bodyHTML']} chars",
+                "timestamp": asyncio.get_event_loop().time(),
+                "page_info": page_info
             }
             
+            print(f"📸 Screenshot captured: {test_name} - {page_info}")
             return True
+            
         except Exception as e:
-            print(f"Failed to capture screenshot for {test_name}: {e}")
+            print(f"❌ Failed to capture screenshot for {test_name}: {e}")
             return False
+
     
     async def _run_basic_tests(self, page, test_plan):
-        """Run basic functionality tests with better content waiting"""
+        """Run basic functionality tests with JavaScript dependency detection"""
         results = []
         
         for test in test_plan.get("basic_tests", []):
@@ -340,92 +456,178 @@ Return a JSON with test scenarios:
             
             try:
                 if test["name"] == "page_load":
-                    # Navigate with better waiting strategy
+                    print("🚀 Starting enhanced page load with dependency checking...")
+                    
+                    # Navigate and wait for network to be completely idle
                     response = await page.goto(
                         self.simulation_url, 
-                        wait_until='domcontentloaded',  # Wait for DOM to be ready
-                        timeout=15000
+                        wait_until='networkidle',  # Wait for ALL network requests
+                        timeout=30000
                     )
                     
-                    # Wait for the page to be actually ready
-                    await page.wait_for_timeout(3000)  # Give JavaScript time to execute
+                    print("✅ Initial navigation complete")
                     
-                    # Try to wait for common elements that indicate content is loaded
-                    try:
-                        # Wait for ANY visible element (body with content)
-                        await page.wait_for_function(
-                            "document.body && document.body.innerHTML.trim().length > 100",
-                            timeout=5000
-                        )
-                    except:
-                        # If no substantial content, wait for basic body
-                        await page.wait_for_selector("body", timeout=5000)
+                    # Debug missing resources
+                    await self._debug_missing_resources(page)
                     
-                    # Wait for any images to load
-                    try:
-                        await page.wait_for_load_state('networkidle', timeout=5000)
-                    except:
-                        pass  # Continue if network isn't idle
+                    # ENHANCED: Wait for common Virtual Labs JavaScript patterns
+                    js_loaded = False
+                    for attempt in range(8):  # 8 attempts with different strategies
+                        print(f"🔄 JavaScript detection attempt {attempt + 1}/8")
+                        
+                        await page.wait_for_timeout(3000)
+                        
+                        # Strategy 1: Wait for jQuery (very common in Virtual Labs)
+                        try:
+                            await page.wait_for_function("window.jQuery || window.$", timeout=5000)
+                            print("✅ jQuery detected!")
+                            js_loaded = True
+                            break
+                        except:
+                            pass
+                        
+                        # Strategy 2: Wait for any global simulation objects
+                        try:
+                            await page.wait_for_function(
+                                """() => {
+                                    // Common Virtual Labs global variables
+                                    return window.simulation || window.lab || window.experiment || 
+                                        window.vlabs || window.app || window.main ||
+                                        document.querySelector('canvas') ||
+                                        document.querySelector('.simulation-area') ||
+                                        document.querySelector('#simulation');
+                                }""", 
+                                timeout=5000
+                            )
+                            print("✅ Simulation objects detected!")
+                            js_loaded = True
+                            break
+                        except:
+                            pass
+                        
+                        # Strategy 3: Wait for DOM mutations (elements being added)
+                        try:
+                            initial_dom_size = await page.evaluate("document.querySelectorAll('*').length")
+                            await page.wait_for_timeout(2000)
+                            new_dom_size = await page.evaluate("document.querySelectorAll('*').length")
+                            
+                            if new_dom_size > initial_dom_size:
+                                print(f"✅ DOM growing: {initial_dom_size} -> {new_dom_size} elements")
+                                # Continue waiting a bit more for DOM to stabilize
+                                await page.wait_for_timeout(3000)
+                            
+                        except:
+                            pass
+                    
+                    # FORCE LOAD: Try to manually load common Virtual Labs JavaScript
+                    if not js_loaded:
+                        print("🔧 Attempting to force-load common JavaScript files...")
+                        
+                        common_js_files = [
+                            '/js/main.js', '/js/script.js', '/js/simulation.js', '/js/app.js',
+                            '/javascript/main.js', '/scripts/main.js'
+                        ]
+                        
+                        for js_file in common_js_files:
+                            try:
+                                # Try to inject the script
+                                await page.evaluate(f"""
+                                    new Promise((resolve) => {{
+                                        const script = document.createElement('script');
+                                        script.src = '{js_file}';
+                                        script.onload = () => resolve(true);
+                                        script.onerror = () => resolve(false);
+                                        document.head.appendChild(script);
+                                        setTimeout(() => resolve(false), 3000);
+                                    }})
+                                """)
+                                
+                                # Wait for script to execute
+                                await page.wait_for_timeout(2000)
+                                
+                                # Check if this created interactive elements
+                                elements_check = await page.evaluate(
+                                    "document.querySelectorAll('button, input, canvas, [onclick]').length"
+                                )
+                                
+                                if elements_check > 0:
+                                    print(f"✅ Success! {js_file} created {elements_check} interactive elements")
+                                    break
+                                    
+                            except Exception as e:
+                                print(f"⚠️ Failed to load {js_file}: {e}")
+                    
+                    # Final comprehensive check
+                    await page.wait_for_timeout(3000)
                     
                     title = await page.title()
+                    content_length = await page.evaluate("document.body ? document.body.innerHTML.length : 0")
+                    visible_text = await page.evaluate("document.body ? document.body.innerText.trim().length : 0")
                     
-                    # Capture initial page load screenshot AFTER content loads
-                    await self._capture_screenshot(page, "initial_page_load", "Initial page load state with content")
-                    
-                    # Wait a bit more for any dynamic content
+                    await self._capture_screenshot(page, "initial_page_load", f"Enhanced load: {content_length} chars")
                     await page.wait_for_timeout(2000)
+                    await self._capture_screenshot(page, "page_fully_loaded", f"Final enhanced state: {content_length} chars")
                     
-                    # Check if we have actual content
-                    content_length = await page.evaluate("document.body.innerHTML.length")
-                    has_content = content_length > 100
-                    
-                    # Capture after ensuring content is present
-                    await self._capture_screenshot(page, "page_fully_loaded", f"Page after content loading ({content_length} chars)")
-                    
+                    has_content = content_length > 500 or visible_text > 100
                     status = "PASS" if response and response.status < 400 and title and has_content else "FAIL"
-                    details = f"Page title: '{title}', HTTP Status: {response.status if response else 'No response'}, Content: {content_length} chars"
                     
                     results.append({
                         "test": "page_load",
                         "status": status,
-                        "details": details,
+                        "details": f"Title: '{title}', Status: {response.status if response else 'No response'}, Content: {content_length} chars, JS Loaded: {js_loaded}",
                         "execution_time": round(asyncio.get_event_loop().time() - start_time, 2)
                     })
                 
                 elif test["name"] == "ui_elements":
-                    # Wait for interactive elements to be available
-                    await page.wait_for_timeout(2000)  # Give time for elements to render
+                    print("🔍 Starting ULTIMATE element detection...")
                     
-                    # Try to wait for common interactive elements
-                    try:
-                        await page.wait_for_function(
-                            """() => {
-                                const buttons = document.querySelectorAll('button, input[type="button"], input[type="submit"]');
-                                const inputs = document.querySelectorAll('input, select, textarea');
-                                const canvas = document.querySelectorAll('canvas');
-                                return buttons.length > 0 || inputs.length > 0 || canvas.length > 0;
-                            }""",
-                            timeout=5000
-                        )
-                    except:
-                        pass  # Continue even if no interactive elements found
+                    # Wait for any remaining JavaScript
+                    await page.wait_for_timeout(5000)
                     
-                    # Count all interactive elements
-                    buttons = await page.query_selector_all("button, input[type='button'], input[type='submit']")
-                    inputs = await page.query_selector_all("input, select, textarea")
-                    selects = await page.query_selector_all("select")
-                    canvas = await page.query_selector_all("canvas")
+                    # ULTIMATE element detection - try EVERYTHING
+                    element_counts = await page.evaluate("""() => {
+                        // Force re-scan the entire DOM
+                        const allElements = document.querySelectorAll('*');
+                        
+                        let interactive = {
+                            buttons: document.querySelectorAll('button, .btn, .button, [role="button"], input[type="button"], input[type="submit"]').length,
+                            inputs: document.querySelectorAll('input, select, textarea, [contenteditable="true"]').length,
+                            clickables: document.querySelectorAll('[onclick], .clickable, .click, [data-click]').length,
+                            canvas: document.querySelectorAll('canvas').length,
+                            svg: document.querySelectorAll('svg').length,
+                            links: document.querySelectorAll('a[href]').length,
+                            forms: document.querySelectorAll('form').length,
+                            
+                            // Advanced detection
+                            hasTabIndex: document.querySelectorAll('[tabindex]').length,
+                            hasAriaLabel: document.querySelectorAll('[aria-label]').length,
+                            hasDataAttributes: document.querySelectorAll('[data-action], [data-target], [data-toggle]').length,
+                            
+                            // Check for hidden/dynamic elements
+                            hiddenElements: document.querySelectorAll('[style*="display:none"], [style*="visibility:hidden"], .hidden, .d-none').length,
+                            
+                            totalElements: allElements.length,
+                            bodyHTML: document.body ? document.body.innerHTML.length : 0
+                        };
+                        
+                        interactive.anyInteractive = interactive.buttons + interactive.inputs + 
+                                                interactive.clickables + interactive.canvas + 
+                                                interactive.svg + interactive.links;
+                        
+                        return interactive;
+                    }""")
                     
-                    # Capture UI elements screenshot
-                    await self._capture_screenshot(page, "ui_elements_detection", "UI elements identification after waiting")
+                    await self._capture_screenshot(page, "ui_elements_detection", f"ULTIMATE detection: {element_counts}")
                     
-                    total_interactive = len(buttons) + len(inputs) + len(canvas)
-                    
+                    total_interactive = element_counts['anyInteractive']
                     status = "PASS" if total_interactive > 0 else "FAIL"
+                    
+                    details = f"ULTIMATE detection - Found: {element_counts['anyInteractive']} total interactive ({element_counts['buttons']}btn/{element_counts['inputs']}inp/{element_counts['clickables']}click/{element_counts['canvas']}canvas/{element_counts['links']}links), Hidden: {element_counts['hiddenElements']}, Total DOM: {element_counts['totalElements']}"
+                    
                     results.append({
                         "test": "ui_elements",
                         "status": status,
-                        "details": f"Found {len(buttons)} buttons, {len(inputs)} inputs, {len(selects)} select elements, {len(canvas)} canvas elements",
+                        "details": details,
                         "execution_time": round(asyncio.get_event_loop().time() - start_time, 2)
                     })
                     
@@ -438,6 +640,10 @@ Return a JSON with test scenarios:
                 })
         
         return results
+
+
+
+
 
     
     async def _run_interaction_tests(self, page, test_plan):
@@ -680,6 +886,77 @@ Return a JSON with test scenarios:
                 "test_results": [],
                 "screenshots": self.screenshots  # Include any screenshots captured before failure
             }
+            
+    async def _debug_missing_resources(self, page):
+        """Debug what resources are missing that might contain interactive elements"""
+        try:
+            # Check for JavaScript files that should be loading
+            js_info = await page.evaluate("""() => {
+                const scripts = Array.from(document.querySelectorAll('script'));
+                const links = Array.from(document.querySelectorAll('link[rel="stylesheet"]'));
+                const errors = [];
+                
+                // Check for common Virtual Labs JavaScript patterns
+                const commonJS = [
+                    'js/main.js', 'js/script.js', 'js/simulation.js', 'js/app.js',
+                    'javascript/main.js', 'javascript/script.js',
+                    'assets/js/', 'scripts/', 'lib/', 'libs/'
+                ];
+                
+                // Check for external CDN dependencies
+                const externalResources = scripts.filter(s => 
+                    s.src && (s.src.includes('cdn') || s.src.includes('http'))
+                );
+                
+                return {
+                    totalScripts: scripts.length,
+                    scriptSources: scripts.map(s => s.src).filter(Boolean),
+                    stylesheets: links.map(l => l.href).filter(Boolean),
+                    externalResources: externalResources.map(s => s.src),
+                    hasJQuery: !!window.jQuery,
+                    hasBootstrap: !!window.bootstrap,
+                    documentReady: document.readyState,
+                    errorMessages: window.console ? 'Check browser console' : 'No console access'
+                };
+            }""")
+            
+            print(f"🔍 Resource debug info: {js_info}")
+            return js_info
+            
+        except Exception as e:
+            print(f"❌ Debug failed: {e}")
+            return {}
+
+
+
+    async def _debug_blank_page(self, page, test_name):
+        """Debug method to understand why page is blank"""
+        try:
+            debug_info = await page.evaluate("""() => {
+                const body = document.body;
+                const html = document.documentElement;
+                
+                return {
+                    hasBody: !!body,
+                    bodyHTML: body ? body.innerHTML.substring(0, 500) : 'NO BODY',
+                    bodyText: body ? body.innerText.substring(0, 200) : 'NO TEXT',
+                    bodyStyle: body ? window.getComputedStyle(body).display : 'NO STYLE',
+                    htmlContent: html ? html.innerHTML.substring(0, 300) : 'NO HTML',
+                    scripts: document.querySelectorAll('script').length,
+                    links: document.querySelectorAll('link').length,
+                    readyState: document.readyState,
+                    bodyDimensions: body ? `${body.offsetWidth}x${body.offsetHeight}` : 'NO DIMENSIONS'
+                };
+            }""")
+            
+            print(f"🔍 Debug info for {test_name}: {debug_info}")
+            
+            # Take screenshot anyway for debugging
+            await self._capture_screenshot(page, f"debug_{test_name}", f"Debug capture: {debug_info}")
+            
+        except Exception as e:
+            print(f"❌ Debug failed: {e}")
+
     
     def get_output(self):
         """Main method to run browser functionality tests"""
