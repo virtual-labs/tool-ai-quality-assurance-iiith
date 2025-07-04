@@ -17,124 +17,114 @@ from config_loader import load_config
 CONFIG = load_config()
 
 class QAPipeline:
-    def __init__(self, model=None, custom_weights=None):
-        if model is None:
-            model = CONFIG["general"]["default_model"]
-            
-        self.llm = ChatGoogleGenerativeAI(
-            model=model,
-            temperature=CONFIG["llm"]["temperature"],
-            max_tokens=CONFIG["llm"]["max_tokens"]
-        )
+    def __init__(self, model="gemini-1.5-flash", custom_weights=None):
+        self.model = model
+        self.custom_weights = custom_weights or CONFIG["weights"]
         self.temp_dir = None
         self.repo_url = None
         self.evaluation_results = {}
-        self.final_score = 0
-        self.report = ""
         
-        # Use custom weights if provided, otherwise use config defaults
-        if custom_weights is None:
-            self.weights = CONFIG["weights"].copy()
-        else:
-            self.weights = custom_weights.copy()
-    
-    def update_weights(self, new_weights):
-        """Update evaluation weights"""
-        if new_weights is not None:
-            self.weights = new_weights.copy()
-        else:
-            self.weights = CONFIG["weights"].copy()
-    
-    def get_weights(self):
-        """Get current weights"""
-        return self.weights.copy()
+        # Initialize LLM
+        try:
+            self.llm = ChatGoogleGenerativeAI(
+                model=self.model,
+                temperature=0.1,
+                max_tokens=None,
+                timeout=None,
+                max_retries=2,
+            )
+        except Exception as e:
+            raise Exception(f"Failed to initialize LLM: {str(e)}")
     
     def get_repository_branches(self, repo_url):
-        """Get all remote branches of a GitHub repository using git ls-remote"""
+        """Get available branches from the repository"""
         try:
-            result = subprocess.run(
-                ["git", "ls-remote", "--heads", repo_url],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=True,
-                text=True,
-                timeout=30  # Add timeout to prevent hanging
-            )
-            output = result.stdout
+            result = subprocess.run([
+                'git', 'ls-remote', '--heads', repo_url
+            ], capture_output=True, text=True, timeout=30)
             
-            # Extract branch names from lines like: <hash>\trefs/heads/<branch>
-            branches = re.findall(r'refs/heads/(.+)', output)
+            if result.returncode != 0:
+                return False, f"Failed to fetch branches: {result.stderr}"
             
-            if branches:
-                # Sort branches - put main and master first if they exist
-                main_branches = [b for b in branches if b in ['main', 'master']]
-                other_branches = [b for b in branches if b not in ['main', 'master']]
-                sorted_branches = main_branches + sorted(other_branches)
-                return True, sorted_branches
-            else:
-                return True, ["main", "master"]  # Fallback if no branches found
-                
-        except subprocess.CalledProcessError as e:
-            return False, f"Failed to fetch branches: {e.stderr.strip()}"
+            branches = []
+            for line in result.stdout.strip().split('\n'):
+                if line:
+                    branch_name = line.split('\t')[1].replace('refs/heads/', '')
+                    branches.append(branch_name)
+            
+            return True, branches if branches else ["main"]
         except subprocess.TimeoutExpired:
             return False, "Timeout while fetching branches"
         except Exception as e:
             return False, f"Error fetching branches: {str(e)}"
-        
+    
     def clone_repository(self, repo_url, branch="main"):
         """Clone the repository to a temporary directory"""
         self.repo_url = repo_url
         self.temp_dir = tempfile.mkdtemp()
         
         try:
-            # Clone the repository
-            repo = Repo.clone_from(repo_url, self.temp_dir)
-            
-            # Try to checkout the specified branch
-            try:
-                repo.git.checkout(branch)
-            except GitCommandError as e:
-                # If branch doesn't exist, try master as fallback
-                if branch != "master":
-                    try:
-                        repo.git.checkout("master")
-                    except GitCommandError:
-                        pass
-            
-            return True, f"Repository cloned successfully to {self.temp_dir}, branch: {branch}"
-        except Exception as e:
+            # Clone with specific branch
+            Repo.clone_from(repo_url, self.temp_dir, branch=branch)
+            return True, f"Repository cloned successfully to {self.temp_dir}"
+        except GitCommandError as e:
+            if "does not exist" in str(e) and branch != "main":
+                # Try with main branch if specified branch doesn't exist
+                try:
+                    shutil.rmtree(self.temp_dir)
+                    self.temp_dir = tempfile.mkdtemp()
+                    Repo.clone_from(repo_url, self.temp_dir, branch="main")
+                    return True, f"Repository cloned successfully to {self.temp_dir} (using main branch)"
+                except GitCommandError as e2:
+                    return False, f"Failed to clone repository: {str(e2)}"
             return False, f"Failed to clone repository: {str(e)}"
+        except Exception as e:
+            return False, f"Unexpected error during cloning: {str(e)}"
     
     def evaluate_repository(self):
         """Run the complete evaluation pipeline"""
         if not self.temp_dir or not os.path.exists(self.temp_dir):
             return False, "Repository not cloned yet."
         
-        # Step 1: Repository analysis first
+        # Step 1: Repository metadata analysis
         try:
             repo_agent = RepositoryAgent(repo_path=self.temp_dir, repo_url=self.repo_url)
-            repo_agent.skip_enhancement = True
             repo_agent.set_llm(self.llm)
             repo_results = repo_agent.get_output()
             self.evaluation_results['repository'] = repo_results
         except Exception as e:
             print(f"Warning: Repository analysis failed: {str(e)}")
+            # Provide default repository results
+            self.evaluation_results['repository'] = {
+                "experiment_name": "Unknown Experiment",
+                "experiment_overview": "Repository analysis failed",
+                "enhanced_overview": "Could not analyze repository metadata",
+                "learning_objectives": [],
+                "subject_area": "Unknown"
+            }
     
-        # Step 2: Structure evaluation
-        structure_agent = StructureComplianceAgent(self.temp_dir)
-        structure_agent.skip_enhancement = True
-        structure_agent.set_llm(self.llm)
-        structure_results = structure_agent.get_output()
-        self.evaluation_results['structure'] = structure_results
-    
-        if structure_results['compliance_score'] < CONFIG["thresholds"]["structure_minimum"]:
-            return False, "Repository structure does not meet minimum requirements."
+        # Step 2: Structure compliance evaluation
+        try:
+            structure_agent = StructureComplianceAgent(self.temp_dir)
+            structure_agent.set_llm(self.llm)
+            structure_results = structure_agent.get_output()
+            self.evaluation_results['structure'] = structure_results
+            
+            # Check if structure meets minimum requirements
+            if structure_results['compliance_score'] < CONFIG["thresholds"]["structure_minimum"]:
+                return False, "Repository structure does not meet minimum requirements."
+                
+        except Exception as e:
+            return False, f"Structure evaluation failed: {str(e)}"
     
         # Step 3: Content evaluation
-        content_agent = ContentEvaluationAgent(self.temp_dir)
-        content_agent.set_llm(self.llm)
-        content_results = content_agent.get_output()
-        self.evaluation_results['content'] = content_results
+        try:
+            content_agent = ContentEvaluationAgent(self.temp_dir)
+            content_agent.set_llm(self.llm)
+            content_results = content_agent.get_output()
+            self.evaluation_results['content'] = content_results
+        except Exception as e:
+            return False, f"Content evaluation failed: {str(e)}"
     
         # Step 4: Simulation evaluation
         simulation_agent = SimulationEvaluationAgent(self.temp_dir)
@@ -165,54 +155,39 @@ class QAPipeline:
         
         self.final_score = score_results['final_score']
         self.report = score_results['report']
+
         
         return True, "Evaluation completed successfully."
-        
-    def get_score(self):
-        """Return the final score"""
-        return self.final_score
-        
-    def clean_report(self, report_text):
-        """Clean up report text by removing unwanted markdown artifacts and acknowledgments"""
-        # Remove code blocks
-        report_text = re.sub(r'```[a-z]*\n', '', report_text)
-        report_text = report_text.replace("```", "")
-        
-        # Remove acknowledgment lines
-        lines = report_text.split('\n')
-        # filtered_lines = []
-        
-        # for line in lines:
-        #     # Skip lines that look like acknowledgments
-        #     if any(phrase in line.lower() for phrase in [
-        #         "i will", "okay,", "sure,", "here's", "here is", "as requested"
-        #     ]) and len(line) < 100:  # Usually acknowledgments are short
-        #         continue
-        #     filtered_lines.append(line)
-        
-        # return '\n'.join(filtered_lines)
-        return '\n'.join(lines)
-    
-    def get_report(self):
-        """Return the cleaned detailed evaluation report"""
-        return self.clean_report(self.report)
     
     def get_results(self):
-        """Return all evaluation results"""
-        return {
-            'final_score': self.final_score,
-            'report': self.report,
-            'detailed_results': self.evaluation_results
+        """Get the evaluation results"""
+        # Ensure we have repository metadata for the UI
+        if 'repository' not in self.evaluation_results:
+            self.evaluation_results['repository'] = {
+                "experiment_name": "Unknown Experiment",
+                "experiment_overview": "No overview available",
+                "enhanced_overview": "Repository analysis not completed",
+                "learning_objectives": [],
+                "subject_area": "Unknown"
+            }
+        
+        # Add detailed results for backward compatibility
+        self.evaluation_results['detailed_results'] = {
+            'repository': self.evaluation_results.get('repository', {}),
+            'structure': self.evaluation_results.get('structure', {}),
+            'content': self.evaluation_results.get('content', {}),
+            'simulation': self.evaluation_results.get('simulation', {})
         }
         
+        return self.evaluation_results
+    
     def cleanup(self):
-        """Clean up temporary resources"""
-        if self.temp_dir and os.path.exists(self.temp_dir) and CONFIG["general"]["temp_cleanup"]:
-            try:
-                shutil.rmtree(self.temp_dir)
-                self.temp_dir = None
-            except Exception as e:
-                print(f"Warning: Could not clean up temporary directory: {str(e)}")
+        """Clean up temporary files"""
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+    
+    def __del__(self):
+        self.cleanup()
 
 if __name__ == "__main__":
     # Example usage
@@ -233,14 +208,12 @@ if __name__ == "__main__":
             print(f"Evaluation failed: {message}")
         else:
             results = pipeline.get_results()
-            print(f"\nEvaluation Score: {results['final_score']:.1f}/100\n")
-            print("Report:")
-            print(results['report'])
+            print(f"\nEvaluation Results:")
+            print(f"Experiment: {results.get('experiment_name', 'Unknown')}")
+            print(f"Final Score: {results.get('final_score', 0):.1f}/100")
             
-            # Save report to file
-            with open("qa_report.md", "w") as f:
-                f.write(results['report'])
-            print("\nReport saved to qa_report.md")
-            
-    # Clean up
-    pipeline.cleanup()
+            if 'component_scores' in results:
+                component_scores = results['component_scores']
+                print(f"Structure: {component_scores.get('structure', 0):.1f}/100")
+                print(f"Content: {component_scores.get('content', 0):.1f}/100")
+                print(f"Simulation: {component_scores.get('simulation', 0):.1f}/100")

@@ -1,23 +1,19 @@
 import os
-import json
-import re
 import tempfile
+import subprocess
 from BaseAgent import BaseAgent
-from config_loader import load_config
-
-# Load the configuration
-CONFIG = load_config()
 
 class ScoreCalculationAgent(BaseAgent):
     def __init__(self, evaluation_results, custom_weights=None):
+        self.evaluation_results = evaluation_results
+        self.custom_weights = custom_weights or {"structure": 0.25, "content": 0.5, "simulation": 0.25}
+        
         super().__init__(
-            role="Quality Assessment Report Generator",
-            basic_prompt="Generate quality assessment report",
+            role="Score Calculation Agent",
+            basic_prompt="Calculate final scores based on evaluation results",
             context=""
         )
-        self.evaluation_results = evaluation_results
-        self.custom_weights = custom_weights if custom_weights else CONFIG["weights"].copy()
-
+    
     def _count_template_files(self):
         """Count how many content files are templates"""
         if 'content' not in self.evaluation_results:
@@ -39,13 +35,6 @@ class ScoreCalculationAgent(BaseAgent):
         
         return template_count, total_evaluated, template_percentage
     
-    def clone_repository(self, repo_url, branch="main"):
-        """Clone the repository to a temporary directory"""
-        self.repo_url = repo_url
-        self.temp_dir = tempfile.mkdtemp()
-    
-        # Rest of the method...
-    
     def get_output(self):
         # Use custom weights instead of config weights
         structure_weight = self.custom_weights["structure"]
@@ -58,8 +47,9 @@ class ScoreCalculationAgent(BaseAgent):
         content_score = self.evaluation_results.get('content', {}).get('average_score', 0)
         simulation_score = self.evaluation_results.get('simulation', {}).get('overall_score', 0)
         browser_score = self.evaluation_results.get('browser_testing', {}).get('browser_score', 0)
+
         
-        # Get experiment name
+        # Get experiment name from repository results
         experiment_name = "Virtual Lab Experiment"
         if 'repository' in self.evaluation_results:
             repo_data = self.evaluation_results['repository']
@@ -120,17 +110,31 @@ Final assessment and next steps."""
         # Set context directly
         self.context = direct_prompt
         
+        # Generate report using LLM
+        template_count, total_evaluated, template_percentage = self._count_template_files()
+        
+        # Get enhanced overview from repository results
+        enhanced_overview = ""
+        learning_objectives = []
+        if 'repository' in self.evaluation_results:
+            repo_data = self.evaluation_results['repository']
+            enhanced_overview = repo_data.get('enhanced_overview', repo_data.get('experiment_overview', ''))
+            learning_objectives = repo_data.get('learning_objectives', [])
+        
+        
         try:
-            report = super().get_output()
+            self.context = report_prompt
+            report_response = super().get_output()
             
-            # Cleanup logic remains the same...
-            lines = report.split('\n')
+            # Clean up the report
+            lines = report_response.split('\n')
             clean_lines = []
             found_start = False
             
             for line in lines:
                 line_clean = line.strip()
                 
+                # Skip LLM conversational responses
                 if any(unwanted in line_clean.lower() for unwanted in [
                     'okay, i will', 'i will generate', 'here\'s the', 'here is the',
                     'certainly', 'sure,', 'as requested', 'markdown'
@@ -166,9 +170,18 @@ Based on the evaluation, improvements are needed in areas scoring below 70/100."
         
         except Exception as e:
             print(f"Error generating report: {str(e)}")
-            report = f"""# Quality Report: {experiment_name}
+            report = f"""# Virtual Lab Quality Report: {experiment_name}
 
-Final Score: {final_score:.1f}/100"""
+## Executive Summary
+Overall Quality Score: {final_score:.1f}/100
+
+## Component Scores
+- Structure: {structure_score * 10:.1f}/100
+- Content: {content_score * 10:.1f}/100  
+- Simulation: {simulation_score * 10:.1f}/100
+
+## Assessment
+This Virtual Lab has been evaluated across structure, content, and simulation components."""
     
         # UPDATED: Return includes browser testing component
         return {
