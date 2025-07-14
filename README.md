@@ -1,66 +1,123 @@
-# Tool: AI Quality Assurance – IIITH
+# Virtual Labs AI Quality Assurance Tool
 
-This repository contains the AI Quality Assurance tool developed by the Virtual Labs team at IIITH.
+A comprehensive tool for automatically evaluating Virtual Labs repositories across structure, content quality, and browser functionality using AI-powered analysis.
 
-## Getting Started
+## What It Does
 
-Follow these steps to set up and run the application locally.
+The tool performs multi-dimensional quality assessment:
 
-### 1. Clone the Repository
+- **Structure Compliance**: Validates repository structure against Virtual Labs standards
+- **Content Evaluation**: Analyzes educational content quality and detects template placeholders
+- **Browser Testing**: Uses Playwright to test simulation functionality across different browsers
+- **Automated Reporting**: Generates detailed markdown reports with actionable recommendations
 
+## Architecture
+
+The system uses an agent-based architecture where each component handles a specific evaluation aspect:
+
+```
+tool-ai-quality-assurance-iiith/
+├── main.py                 # Main pipeline
+├── ui.py                   # Streamlit web interface
+├── BaseAgent.py            # Base class for all agents
+├── config_loader.py        # Configuration management
+├── config.toml             # Configuration file
+└── Agents/
+    ├── RepositoryAgent.py           # Repository metadata analysis
+    ├── StructureComplianceAgent.py  # File structure validation
+    ├── ContentEvaluationAgent.py    # Content quality assessment
+    ├── PlaywrightTestingAgent.py    # Browser functionality testing
+    └── ScoreCalculationAgent.py     # Final scoring and reporting
+```
+
+## Setup
+
+### Prerequisites
+
+- Python 3.10+
+- Google AI API key (for Gemini)
+- Node.js (for Playwright browser automation)
+
+### Installation
+
+1. Clone and setup environment:
 ```bash
 git clone https://github.com/virtual-labs/tool-ai-quality-assurance-iiith.git
 cd tool-ai-quality-assurance-iiith
-```
-
-### 2. Create and Activate a Virtual Environment
-
-It is recommended to use a virtual environment to manage dependencies.
-
-```bash
 python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-#### On Windows:
-
+2. Install dependencies:
 ```bash
-venv\Scripts\activate
+pip install -r requirements.txt
+playwright install chromium
 ```
 
-#### On macOS/Linux:
+3. Configure API access:
+```bash
+# Create .env file
+echo "GOOGLE_API_KEY=your_api_key_here" > .env
+```
 
+## Running the Tool
+
+### Activate venv
 ```bash
 source venv/bin/activate
 ```
 
-### 3. Install the Required Packages
-
-Install the necessary dependencies from the `requirements.txt` file.
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configure the Environment Variables
-
-Create a `.env` file if it doesn't already exist:
-
-```bash
-touch .env
-```
-
-Open `.env` and add the following:
-
-```env
-GOOGLE_API_KEY=Your_Google_API_Key_Here
-```
-
-Replace `Your_Google_API_Key_Here` with your actual Google API Key.
-
-### 5. Run the Application
-
-Start the Streamlit UI:
-
+### Web Interface (Recommended)
 ```bash
 streamlit run ui.py
 ```
+
+### Command Line
+```bash
+python main.py
+```
+
+## Extending the Tool
+
+### Adding New Evaluation Criteria
+
+1. Create a new agent class inheriting from `BaseAgent`:
+```python
+class MyEvaluationAgent(BaseAgent):
+    role = "My Specific Evaluator"
+    
+    def __init__(self, repo_path):
+        self.repo_path = repo_path
+        super().__init__(self.role, basic_prompt=self.prompt_template)
+    
+    def get_output(self):
+        # Implement your evaluation logic
+        return evaluation_results
+```
+
+2. Integrate into the pipeline (`main.py`):
+```python
+# Add to evaluate_repository method
+my_agent = MyEvaluationAgent(self.temp_dir)
+my_agent.set_llm(self.llm)
+my_results = my_agent.get_output()
+self.evaluation_results['my_evaluation'] = my_results
+```
+
+3. Update scoring weights in `config.toml` and `ScoreCalculationAgent`
+
+### Customizing Evaluation Logic
+
+Agents can be enhanced by:
+- Modifying prompt templates for different evaluation criteria
+- Adding new similarity metrics for template detection
+- Implementing custom file parsing logic
+- Extending browser testing scenarios
+
+### UI Customization
+
+The Streamlit interface (ui.py) can be extended with:
+- New visualization components
+- Additional export formats
+- Custom result filtering and analysis
+- Real-time evaluation progress tracking
