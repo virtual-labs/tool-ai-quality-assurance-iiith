@@ -281,7 +281,7 @@ if st.session_state.evaluation_complete and st.session_state.results:
         st.metric("Content", f"{content_score:.1f}/100")
     with cols[2]:
         st.metric("Browser Testing", f"{browser_score:.1f}/100")
-    
+
     # Tabs for detailed results
     tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Content Evaluation", "Browser Testing", "Full Report"])
     
@@ -412,85 +412,283 @@ if st.session_state.evaluation_complete and st.session_state.results:
                     else:
                         st.warning(f"{file_path}: {evaluation.get('reason', 'Not evaluated')}")
     
+
     with tab3:
         # Browser testing details
         detailed_results = results.get('detailed_results', {})
         if 'browser_testing' in detailed_results:
             browser_data = detailed_results['browser_testing']
             
-            st.subheader("🎭 Browser Testing Results")
+            st.subheader("🎭 Browser Testing & Performance Analysis")
             
-            # Test execution summary in a single row
-            metric_cols = st.columns(4)
+            # Debug information
+            st.text(f"Debug: Browser data keys: {list(browser_data.keys())}")
+            st.text(f"Debug: Browser score: {browser_data.get('browser_score', 'Not found')}")
+            st.text(f"Debug: Overall score: {browser_data.get('overall_score', 'Not found')}")
+            
+            # Combined metrics in a single row
+            metric_cols = st.columns(5)
             with metric_cols[0]:
-                st.metric("Overall Score", f"{browser_score:.1f}/100")
+                combined_score = browser_data.get('browser_score', browser_data.get('overall_score', 0))
+                st.metric("Combined Score", f"{combined_score * 10:.1f}/100")
             with metric_cols[1]:
-                st.metric("Tests Executed", browser_data.get('total_tests', 0))
+                st.metric("Playwright Tests", f"{browser_data.get('passed_tests', 0)}/{browser_data.get('total_tests', 0)}")
             with metric_cols[2]:
-                st.metric("Tests Passed", browser_data.get('passed_tests', 0))
+                # Get performance metrics
+                perf_metrics = browser_data.get('performance_metrics', {})
+                desktop_perf = perf_metrics.get('desktop_performance', 0)
+                st.metric("Desktop Performance", f"{desktop_perf*100:.0f}/100")
             with metric_cols[3]:
-                st.metric("Execution Status", browser_data.get('status', 'Unknown'))
+                mobile_perf = perf_metrics.get('mobile_performance', 0)
+                st.metric("Mobile Performance", f"{mobile_perf*100:.0f}/100")
+            with metric_cols[4]:
+                st.metric("Status", browser_data.get('status', 'Unknown'))
             
-            # Test plan section
-            st.subheader("🤖 AI-Generated Test Plan")
-            st.markdown("Our system uses Gemini AI to analyze your simulation and generate appropriate test scenarios.")
+            # Create sub-tabs for Playwright and Lighthouse
+            playwright_tab, lighthouse_tab, combined_tab = st.tabs(["🎭 Playwright Results", "🚀 Lighthouse Performance", "📊 Combined Analysis"])
             
-            test_plan = browser_data.get('test_plan_used', {})
-            if test_plan:
-                st.json(test_plan)
-            
-            # Individual Test Results
-            st.subheader("📋 Test Results")
-            test_results = browser_data.get('test_results', [])
-            
-            if test_results:
-                for test in test_results:
-                    status_icon = "✅" if test.get('status') == 'PASS' else "❌" if test.get('status') == 'FAIL' else "⚠️"
-                    st.markdown(f"{status_icon} **{test.get('test', 'Unknown')}**: {test.get('details', 'No details')}")
-            else:
-                st.warning("No test results available")
-            
-            # Technical Details
-            st.subheader("⚙️ Technical Implementation")
-            st.markdown("""
-            **Technology Used:**
-            - 🎭 Playwright for browser automation
-            - 🌐 Chromium browser engine  
-            - 🤖 Gemini AI for test planning
-            - 📸 Screenshot capture for visual verification
-            """)
-            
-            # Screenshots
-            screenshots = browser_data.get('screenshots', {})
-            if screenshots:
-                st.subheader("📸 Screenshots Captured")
-                st.markdown(f"**{len(screenshots)} screenshots** were captured during testing:")
+            with playwright_tab:
+                st.subheader("Functional Testing Results")
                 
-                for i, (screenshot_name, screenshot_info) in enumerate(screenshots.items()):
-                    display_name = screenshot_name.replace('_', ' ').title()
-                    st.markdown(f"**{display_name}**")
+                # Test results
+                test_results = browser_data.get('test_results', [])
+                if test_results:
+                    st.markdown("#### Test Execution Results")
+                    for test in test_results:
+                        status_icon = "✅" if test.get('status') == 'PASS' else "❌" if test.get('status') == 'FAIL' else "⚠️"
+                        st.markdown(f"{status_icon} **{test.get('test', 'Unknown')}**: {test.get('details', 'No details')}")
+                        if test.get('execution_time'):
+                            st.text(f"   ⏱️ Execution time: {test['execution_time']}s")
+                else:
+                    st.warning("No test results available")
+                    st.text(f"Debug: Browser data contains: {list(browser_data.keys())}")
+                
+                # Screenshots section - Enhanced display
+                screenshots = browser_data.get('screenshots', {})
+                if screenshots:
+                    st.subheader("📸 Screenshots Captured")
+                    st.markdown(f"**{len(screenshots)} screenshots** were captured during testing:")
                     
-                    try:
-                        if isinstance(screenshot_info, dict) and 'data' in screenshot_info:
-                            screenshot_data = screenshot_info['data']
+                    # Create columns for better layout
+                    if len(screenshots) <= 3:
+                        cols = st.columns(len(screenshots))
+                    else:
+                        cols = st.columns(3)
+                    
+                    screenshot_items = list(screenshots.items())
+                    for i, (screenshot_name, screenshot_info) in enumerate(screenshot_items):
+                        col_index = i % len(cols)
+                        
+                        with cols[col_index]:
+                            display_name = screenshot_name.replace('_', ' ').title()
+                            st.markdown(f"**{display_name}**")
                             
-                            if isinstance(screenshot_data, str):
-                                try:
-                                    screenshot_bytes = base64.b64decode(screenshot_data)
-                                    st.image(screenshot_bytes, caption=display_name, use_column_width=True)
-                                except Exception as decode_error:
-                                    st.error(f"Could not decode {display_name}: {str(decode_error)}")
+                            try:
+                                # Handle different screenshot data formats
+                                screenshot_data = None
+                                
+                                if isinstance(screenshot_info, dict):
+                                    if 'data' in screenshot_info:
+                                        screenshot_data = screenshot_info['data']
+                                    elif 'screenshot' in screenshot_info:
+                                        screenshot_data = screenshot_info['screenshot']
+                                elif isinstance(screenshot_info, str):
+                                    screenshot_data = screenshot_info
+                                
+                                if screenshot_data:
+                                    try:
+                                        # Try to decode base64 data
+                                        if isinstance(screenshot_data, str):
+                                            screenshot_bytes = base64.b64decode(screenshot_data)
+                                            st.image(screenshot_bytes, caption=display_name, use_container_width=True)
+                                        else:
+                                            st.info(f"Screenshot data format not supported: {type(screenshot_data)}")
+                                    except Exception as decode_error:
+                                        st.error(f"Could not decode screenshot {display_name}: {str(decode_error)}")
+                                        # Debug info
+                                        st.text(f"Data type: {type(screenshot_data)}")
+                                        st.text(f"Data preview: {str(screenshot_data)[:100]}...")
+                                else:
+                                    st.warning(f"No screenshot data found for {display_name}")
+                                    # Debug the screenshot_info structure
+                                    st.text(f"Available keys: {list(screenshot_info.keys()) if isinstance(screenshot_info, dict) else 'Not a dict'}")
+                                    
+                            except Exception as e:
+                                st.error(f"Error displaying screenshot {display_name}: {str(e)}")
+                                # Show debug info
+                                st.text(f"Screenshot info type: {type(screenshot_info)}")
+                                st.text(f"Screenshot info: {str(screenshot_info)[:200]}...")
+                else:
+                    st.info("No screenshots were captured during this test run")
+                    
+                    # Debug information
+                    st.text("Debug info:")
+                    st.text(f"Browser data keys: {list(browser_data.keys())}")
+                    st.text(f"Screenshots type: {type(browser_data.get('screenshots', {}))}")
+                    
+                    # Check if screenshots are in playwright_results
+                    playwright_results = browser_data.get('playwright_results', {})
+                    if playwright_results and 'screenshots' in playwright_results:
+                        st.text(f"Screenshots in playwright_results: {len(playwright_results['screenshots'])}")
+            
+            with lighthouse_tab:
+                st.subheader("Performance & Quality Analysis")
+                
+                lighthouse_results = browser_data.get('lighthouse_results', {})
+                if lighthouse_results and not lighthouse_results.get('error'):
+                    
+                    # Performance scores comparison
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("#### 🖥️ Desktop Performance")
+                        desktop_data = lighthouse_results.get('desktop', {})
+                        desktop_scores = desktop_data.get('scores', {})
+                        
+                        # Create score display
+                        for category, score in desktop_scores.items():
+                            if score is not None:
+                                score_color = "🟢" if score >= 0.9 else "🟡" if score >= 0.5 else "🔴"
+                                st.markdown(f"{score_color} **{category.title()}**: {score*100:.0f}/100")
+                    
+                    with col2:
+                        st.markdown("#### 📱 Mobile Performance")
+                        mobile_data = lighthouse_results.get('mobile', {})
+                        mobile_scores = mobile_data.get('scores', {})
+                        
+                        for category, score in mobile_scores.items():
+                            if score is not None:
+                                score_color = "🟢" if score >= 0.9 else "🟡" if score >= 0.5 else "🔴"
+                                st.markdown(f"{score_color} **{category.title()}**: {score*100:.0f}/100")
+                    
+                    # Performance metrics table
+                    st.subheader("⚡ Key Performance Metrics")
+                    
+                    metrics_data = []
+                    desktop_metrics = desktop_data.get('metrics', {})
+                    mobile_metrics = mobile_data.get('metrics', {})
+                    
+                    metric_names = ['first-contentful-paint', 'largest-contentful-paint', 'speed-index', 'cumulative-layout-shift']
+                    
+                    for metric in metric_names:
+                        metrics_data.append({
+                            'Metric': metric.replace('-', ' ').title(),
+                            'Desktop': desktop_metrics.get(metric, 'N/A'),
+                            'Mobile': mobile_metrics.get(metric, 'N/A')
+                        })
+                    
+                    df_metrics = pd.DataFrame(metrics_data)
+                    st.dataframe(df_metrics, use_container_width=True)
+                    
+                    # Performance opportunities
+                    st.subheader("🎯 Performance Opportunities")
+                    desktop_opportunities = desktop_data.get('opportunities', [])
+                    if desktop_opportunities:
+                        for opp in desktop_opportunities[:5]:  # Show top 5
+                            potential_savings = opp.get('potential_savings', 0)
+                            if potential_savings > 0:
+                                st.markdown(f"• **{opp['title']}**: Could save ~{potential_savings}ms")
                             else:
-                                st.info(f"Screenshot available: {display_name}")
-                        else:
-                            st.info(f"Screenshot available: {display_name}")
-                            
-                    except Exception as e:
-                        st.warning(f"Could not display screenshot: {display_name}")
-            else:
-                st.info("No screenshots were captured during this test run")
+                                st.markdown(f"• **{opp['title']}**: {opp.get('description', '')}")
+                    else:
+                        st.info("No major performance opportunities identified")
+                    
+                    # Lighthouse score visualization
+                    st.subheader("📊 Lighthouse Score Breakdown")
+                    
+                    # Create bar chart comparing desktop vs mobile scores
+                    categories = ['Performance', 'Accessibility', 'Best Practices', 'SEO']
+                    desktop_vals = [desktop_scores.get(cat.lower().replace(' ', '-'), 0)*100 for cat in categories]
+                    mobile_vals = [mobile_scores.get(cat.lower().replace(' ', '-'), 0)*100 for cat in categories]
+                    
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    x = np.arange(len(categories))
+                    width = 0.35
+                    
+                    bars1 = ax.bar(x - width/2, desktop_vals, width, label='Desktop', color='steelblue')
+                    bars2 = ax.bar(x + width/2, mobile_vals, width, label='Mobile', color='lightcoral')
+                    
+                    ax.set_xlabel('Categories')
+                    ax.set_ylabel('Score')
+                    ax.set_title('Lighthouse Scores: Desktop vs Mobile')
+                    ax.set_xticks(x)
+                    ax.set_xticklabels(categories)
+                    ax.legend()
+                    ax.set_ylim(0, 100)
+                    
+                    # Add value labels on bars
+                    for bars in [bars1, bars2]:
+                        for bar in bars:
+                            height = bar.get_height()
+                            ax.annotate(f'{height:.0f}',
+                                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                                    xytext=(0, 3),
+                                    textcoords="offset points",
+                                    ha='center', va='bottom')
+                    
+                    st.pyplot(fig)
+                    
+                else:
+                    st.warning("Lighthouse performance analysis not available")
+                    if lighthouse_results.get('error'):
+                        st.error(f"Error: {lighthouse_results['error']}")
+            
+            with combined_tab:
+                st.subheader("📊 Comprehensive Analysis")
+                
+                # Combined score breakdown
+                st.markdown("#### Score Components")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Functional Testing (60%)**")
+                    playwright_score = browser_data.get('playwright_results', {}).get('browser_score', browser_data.get('browser_score', 0))
+                    st.progress(playwright_score/10, text=f"Playwright: {playwright_score:.1f}/10")
+                
+                with col2:
+                    st.markdown("**Performance Testing (40%)**")
+                    perf_metrics = browser_data.get('performance_metrics', {})
+                    avg_perf = (perf_metrics.get('desktop_performance', 0) + perf_metrics.get('mobile_performance', 0)) / 2
+                    st.progress(avg_perf, text=f"Lighthouse: {avg_perf*10:.1f}/10")
+                
+                # Recommendations section
+                st.subheader("🎯 Recommendations")
+                
+                recommendations = []
+                
+                # Playwright-based recommendations
+                if playwright_score < 7:
+                    recommendations.append("🎭 **Functional Issues**: Review and fix failing Playwright tests")
+                
+                # Lighthouse-based recommendations
+                lighthouse_results = browser_data.get('lighthouse_results', {})
+                if lighthouse_results and not lighthouse_results.get('error'):
+                    desktop_perf = lighthouse_results.get('desktop', {}).get('scores', {}).get('performance', 0)
+                    mobile_perf = lighthouse_results.get('mobile', {}).get('scores', {}).get('performance', 0)
+                    
+                    if desktop_perf < 0.5:
+                        recommendations.append("🖥️ **Desktop Performance**: Optimize for desktop users")
+                    if mobile_perf < 0.5:
+                        recommendations.append("📱 **Mobile Performance**: Optimize for mobile users")
+                    
+                    # Add specific opportunities
+                    desktop_opportunities = lighthouse_results.get('desktop', {}).get('opportunities', [])
+                    for opp in desktop_opportunities[:3]:
+                        if opp.get('potential_savings', 0) > 500:  # > 500ms savings
+                            recommendations.append(f"⚡ **{opp['title']}**: High impact optimization")
+                
+                if recommendations:
+                    for rec in recommendations:
+                        st.markdown(f"• {rec}")
+                else:
+                    st.success("✅ No major issues found. Great job!")
+        
         else:
             st.warning("Browser testing data not available")
+            # Show debug info
+            st.text(f"Available keys in detailed_results: {list(detailed_results.keys())}")
+
+
     
     with tab4:
         # Display report
