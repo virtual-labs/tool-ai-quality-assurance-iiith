@@ -5,6 +5,8 @@ import tempfile
 import shutil
 import base64
 import socket
+import subprocess
+import tempfile
 from playwright.async_api import async_playwright
 from BaseAgent import BaseAgent
 
@@ -461,7 +463,7 @@ Return a JSON with test scenarios:
                     # Navigate and wait for network to be completely idle
                     response = await page.goto(
                         self.simulation_url, 
-                        wait_until='networkidle',  # Wait for ALL network requests
+                        wait_until='networkidle',
                         timeout=30000
                     )
                     
@@ -472,12 +474,12 @@ Return a JSON with test scenarios:
                     
                     # ENHANCED: Wait for common Virtual Labs JavaScript patterns
                     js_loaded = False
-                    for attempt in range(8):  # 8 attempts with different strategies
+                    for attempt in range(8):
                         print(f"🔄 JavaScript detection attempt {attempt + 1}/8")
                         
                         await page.wait_for_timeout(3000)
                         
-                        # Strategy 1: Wait for jQuery (very common in Virtual Labs)
+                        # Strategy 1: Wait for jQuery
                         try:
                             await page.wait_for_function("window.jQuery || window.$", timeout=5000)
                             print("✅ jQuery detected!")
@@ -486,11 +488,10 @@ Return a JSON with test scenarios:
                         except:
                             pass
                         
-                        # Strategy 2: Wait for any global simulation objects
+                        # Strategy 2: Wait for simulation objects
                         try:
                             await page.wait_for_function(
                                 """() => {
-                                    // Common Virtual Labs global variables
                                     return window.simulation || window.lab || window.experiment || 
                                         window.vlabs || window.app || window.main ||
                                         document.querySelector('canvas') ||
@@ -505,7 +506,7 @@ Return a JSON with test scenarios:
                         except:
                             pass
                         
-                        # Strategy 3: Wait for DOM mutations (elements being added)
+                        # Strategy 3: Wait for DOM mutations
                         try:
                             initial_dom_size = await page.evaluate("document.querySelectorAll('*').length")
                             await page.wait_for_timeout(2000)
@@ -513,13 +514,12 @@ Return a JSON with test scenarios:
                             
                             if new_dom_size > initial_dom_size:
                                 print(f"✅ DOM growing: {initial_dom_size} -> {new_dom_size} elements")
-                                # Continue waiting a bit more for DOM to stabilize
                                 await page.wait_for_timeout(3000)
                             
                         except:
                             pass
                     
-                    # FORCE LOAD: Try to manually load common Virtual Labs JavaScript
+                    # FORCE LOAD: Try to manually load common JavaScript files
                     if not js_loaded:
                         print("🔧 Attempting to force-load common JavaScript files...")
                         
@@ -530,7 +530,6 @@ Return a JSON with test scenarios:
                         
                         for js_file in common_js_files:
                             try:
-                                # Try to inject the script
                                 await page.evaluate(f"""
                                     new Promise((resolve) => {{
                                         const script = document.createElement('script');
@@ -542,10 +541,8 @@ Return a JSON with test scenarios:
                                     }})
                                 """)
                                 
-                                # Wait for script to execute
                                 await page.wait_for_timeout(2000)
                                 
-                                # Check if this created interactive elements
                                 elements_check = await page.evaluate(
                                     "document.querySelectorAll('button, input, canvas, [onclick]').length"
                                 )
@@ -557,7 +554,7 @@ Return a JSON with test scenarios:
                             except Exception as e:
                                 print(f"⚠️ Failed to load {js_file}: {e}")
                     
-                    # Final comprehensive check
+                    # Final check
                     await page.wait_for_timeout(3000)
                     
                     title = await page.title()
@@ -581,12 +578,9 @@ Return a JSON with test scenarios:
                 elif test["name"] == "ui_elements":
                     print("🔍 Starting ULTIMATE element detection...")
                     
-                    # Wait for any remaining JavaScript
                     await page.wait_for_timeout(5000)
                     
-                    # ULTIMATE element detection - try EVERYTHING
                     element_counts = await page.evaluate("""() => {
-                        // Force re-scan the entire DOM
                         const allElements = document.querySelectorAll('*');
                         
                         let interactive = {
@@ -598,12 +592,10 @@ Return a JSON with test scenarios:
                             links: document.querySelectorAll('a[href]').length,
                             forms: document.querySelectorAll('form').length,
                             
-                            // Advanced detection
                             hasTabIndex: document.querySelectorAll('[tabindex]').length,
                             hasAriaLabel: document.querySelectorAll('[aria-label]').length,
                             hasDataAttributes: document.querySelectorAll('[data-action], [data-target], [data-toggle]').length,
                             
-                            // Check for hidden/dynamic elements
                             hiddenElements: document.querySelectorAll('[style*="display:none"], [style*="visibility:hidden"], .hidden, .d-none').length,
                             
                             totalElements: allElements.length,
@@ -640,6 +632,7 @@ Return a JSON with test scenarios:
                 })
         
         return results
+
 
 
 
@@ -956,10 +949,342 @@ Return a JSON with test scenarios:
             
         except Exception as e:
             print(f"❌ Debug failed: {e}")
+            
+    
+    def _run_lighthouse_cli(self, url):
+        """Run Lighthouse CLI for performance analysis with fixed mobile support"""
+        try:
+            temp_dir = tempfile.mkdtemp(prefix="lighthouse_")
+            print(f"🔍 Lighthouse temp directory: {temp_dir}")
+            
+            # Run Lighthouse CLI for detailed JSON report
+            desktop_output = os.path.join(temp_dir, 'lighthouse-desktop.json')
+            mobile_output = os.path.join(temp_dir, 'lighthouse-mobile.json')
+            
+            print(f"📊 Desktop output path: {desktop_output}")
+            print(f"📱 Mobile output path: {mobile_output}")
+            
+            # Desktop audit (working fine - no changes needed)
+            desktop_cmd = [
+                'lighthouse', url,
+                '--output=json',
+                f'--output-path={desktop_output}',
+                '--form-factor=desktop',
+                '--preset=desktop',
+                '--throttling-method=devtools',
+                '--throttling.rttMs=40',
+                '--throttling.throughputKbps=10240',
+                '--throttling.cpuSlowdownMultiplier=1',
+                '--screenEmulation.mobile=false',
+                '--screenEmulation.width=1350',
+                '--screenEmulation.height=940',
+                '--screenEmulation.deviceScaleFactor=1',
+                '--emulatedUserAgent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                '--quiet',
+                '--chrome-flags=--headless --no-sandbox --disable-dev-shm-usage --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding'
+            ]
+            
+            # FIXED Mobile audit - removed invalid preset
+            mobile_cmd = [
+                'lighthouse', url,
+                '--output=json', 
+                f'--output-path={mobile_output}',
+                '--form-factor=mobile',
+                '--throttling-method=devtools',
+                '--throttling.rttMs=150',
+                '--throttling.throughputKbps=1638',
+                '--throttling.cpuSlowdownMultiplier=4',
+                '--screenEmulation.mobile=true',
+                '--screenEmulation.width=360',
+                '--screenEmulation.height=640',
+                '--screenEmulation.deviceScaleFactor=2',
+                '--emulatedUserAgent=Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+                '--quiet',
+                '--chrome-flags=--headless --no-sandbox --disable-dev-shm-usage'
+            ]
+            
+            results = {}
+            
+            # Execute Desktop audit (this part is working)
+            print("🖥️ Starting Desktop Lighthouse audit...")
+            try:
+                desktop_process = subprocess.run(
+                    desktop_cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=180,
+                    cwd=temp_dir
+                )
+                
+                print(f"🖥️ Desktop audit completed with return code: {desktop_process.returncode}")
+                
+                if desktop_process.returncode == 0:
+                    if os.path.exists(desktop_output) and os.path.getsize(desktop_output) > 0:
+                        print("✅ Desktop audit file created successfully")
+                        with open(desktop_output, 'r', encoding='utf-8') as f:
+                            desktop_data = json.load(f)
+                            results['desktop'] = self._parse_lighthouse_report(desktop_data)
+                            print(f"✅ Desktop data parsed successfully")
+                    else:
+                        print(f"❌ Desktop output file missing or empty: {desktop_output}")
+                        results['desktop'] = {'error': 'Desktop output file not created'}
+                else:
+                    print(f"❌ Desktop audit failed with error: {desktop_process.stderr}")
+                    results['desktop'] = {'error': f'Desktop audit failed: {desktop_process.stderr}'}
+                    
+            except subprocess.TimeoutExpired:
+                print("⏰ Desktop audit timed out")
+                results['desktop'] = {'error': 'Desktop audit timed out after 3 minutes'}
+            except Exception as e:
+                print(f"❌ Desktop audit exception: {str(e)}")
+                results['desktop'] = {'error': f'Desktop audit exception: {str(e)}'}
+            
+            # Execute Mobile audit (FIXED VERSION)
+            print("📱 Starting Mobile Lighthouse audit...")
+            try:
+                mobile_process = subprocess.run(
+                    mobile_cmd, 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=180,
+                    cwd=temp_dir
+                )
+                
+                print(f"📱 Mobile audit completed with return code: {mobile_process.returncode}")
+                
+                if mobile_process.returncode == 0:
+                    if os.path.exists(mobile_output) and os.path.getsize(mobile_output) > 0:
+                        print("✅ Mobile audit file created successfully")
+                        with open(mobile_output, 'r', encoding='utf-8') as f:
+                            mobile_data = json.load(f)
+                            results['mobile'] = self._parse_lighthouse_report(mobile_data)
+                            print(f"✅ Mobile data parsed successfully")
+                    else:
+                        print(f"❌ Mobile output file missing or empty: {mobile_output}")
+                        results['mobile'] = {'error': 'Mobile output file not created'}
+                else:
+                    print(f"❌ Mobile audit failed with error: {mobile_process.stderr}")
+                    results['mobile'] = {'error': f'Mobile audit failed: {mobile_process.stderr}'}
+                    
+            except subprocess.TimeoutExpired:
+                print("⏰ Mobile audit timed out")
+                results['mobile'] = {'error': 'Mobile audit timed out after 3 minutes'}
+            except Exception as e:
+                print(f"❌ Mobile audit exception: {str(e)}")
+                results['mobile'] = {'error': f'Mobile audit exception: {str(e)}'}
+            
+            # Cleanup
+            try:
+                import time
+                time.sleep(1)
+                import shutil
+                shutil.rmtree(temp_dir)
+                print("🧹 Temp directory cleaned up")
+            except Exception as cleanup_error:
+                print(f"⚠️ Cleanup warning: {cleanup_error}")
+            
+            # Check results
+            if results:
+                success_count = sum(1 for v in results.values() if not isinstance(v, dict) or not v.get('error'))
+                print(f"📊 Lighthouse analysis completed: {success_count}/{len(results)} successful")
+                return True, results
+            else:
+                return False, "No Lighthouse results generated"
+            
+        except Exception as e:
+            print(f"❌ Critical Lighthouse error: {str(e)}")
+            return False, f"Lighthouse CLI execution failed: {str(e)}"
+
+
+
+    def _parse_lighthouse_report(self, lighthouse_data):
+        """Parse Lighthouse JSON report into structured data"""
+        categories = lighthouse_data.get('categories', {})
+        audits = lighthouse_data.get('audits', {})
+        
+        return {
+            'scores': {
+                'performance': categories.get('performance', {}).get('score', 0),
+                'accessibility': categories.get('accessibility', {}).get('score', 0),
+                'best-practices': categories.get('best-practices', {}).get('score', 0),
+                'seo': categories.get('seo', {}).get('score', 0),
+                'pwa': categories.get('pwa', {}).get('score', 0) if 'pwa' in categories else None
+            },
+            'metrics': {
+                'first-contentful-paint': audits.get('first-contentful-paint', {}).get('displayValue', 'N/A'),
+                'largest-contentful-paint': audits.get('largest-contentful-paint', {}).get('displayValue', 'N/A'),
+                'speed-index': audits.get('speed-index', {}).get('displayValue', 'N/A'),
+                'cumulative-layout-shift': audits.get('cumulative-layout-shift', {}).get('displayValue', 'N/A'),
+                'total-blocking-time': audits.get('total-blocking-time', {}).get('displayValue', 'N/A')
+            },
+            'opportunities': self._extract_opportunities(lighthouse_data),
+            'diagnostics': self._extract_diagnostics(lighthouse_data)
+        }
+
+    def _extract_opportunities(self, lighthouse_data):
+        """Extract performance opportunities from Lighthouse report"""
+        audits = lighthouse_data.get('audits', {})
+        opportunities = []
+        
+        opportunity_audits = [
+            'render-blocking-resources', 'unused-css-rules', 'unused-javascript',
+            'modern-image-formats', 'offscreen-images', 'unminified-css',
+            'unminified-javascript', 'efficient-animated-content'
+        ]
+        
+        for audit_id in opportunity_audits:
+            audit = audits.get(audit_id, {})
+            if audit.get('score', 1) < 1:  # Only include failed audits
+                opportunities.append({
+                    'id': audit_id,
+                    'title': audit.get('title', ''),
+                    'description': audit.get('description', ''),
+                    'score': audit.get('score', 0),
+                    'displayValue': audit.get('displayValue', ''),
+                    'potential_savings': audit.get('details', {}).get('overallSavingsMs', 0)
+                })
+        
+        return opportunities
+
+    def _extract_diagnostics(self, lighthouse_data):
+        """Extract diagnostic information from Lighthouse report"""
+        audits = lighthouse_data.get('audits', {})
+        diagnostics = []
+        
+        diagnostic_audits = [
+            'mainthread-work-breakdown', 'bootup-time', 'uses-long-cache-ttl',
+            'total-byte-weight', 'dom-size', 'critical-request-chains'
+        ]
+        
+        for audit_id in diagnostic_audits:
+            audit = audits.get(audit_id, {})
+            if audit.get('score') is not None:
+                diagnostics.append({
+                    'id': audit_id,
+                    'title': audit.get('title', ''),
+                    'description': audit.get('description', ''),
+                    'score': audit.get('score', 0),
+                    'displayValue': audit.get('displayValue', ''),
+                    'details': audit.get('details', {})
+                })
+        
+        return diagnostics
+
+    def _calculate_combined_score(self, playwright_results, lighthouse_results):
+        """Calculate combined score with improved weighting for better scores"""
+        playwright_score = playwright_results.get('browser_score', 0)
+        
+        print(f"🔍 Enhanced Combined Score Debug:")
+        print(f"  Playwright Score: {playwright_score}/10")
+        
+        if lighthouse_results and not lighthouse_results.get('error'):
+            # Get individual performance scores
+            desktop_data = lighthouse_results.get('desktop', {})
+            mobile_data = lighthouse_results.get('mobile', {})
+            
+            desktop_perf = 0
+            mobile_perf = 0
+            
+            # Handle desktop performance
+            if not desktop_data.get('error'):
+                desktop_perf = desktop_data.get('scores', {}).get('performance', 0)
+                print(f"  Desktop Performance: {desktop_perf*10:.1f}/10")
+            
+            # Handle mobile performance  
+            if not mobile_data.get('error'):
+                mobile_perf = mobile_data.get('scores', {}).get('performance', 0)
+                print(f"  Mobile Performance: {mobile_perf*10:.1f}/10")
+            
+            # Calculate lighthouse score with improved logic
+            if desktop_perf > 0 and mobile_perf > 0:
+                # Both succeeded - weighted average (desktop slightly more important for labs)
+                lighthouse_score = (desktop_perf * 0.6 + mobile_perf * 0.4) * 10
+                print(f"  Lighthouse Score: {lighthouse_score}/10 (Weighted average)")
+            elif desktop_perf > 0:
+                lighthouse_score = desktop_perf * 10
+                print(f"  Lighthouse Score: {lighthouse_score}/10 (Desktop only)")
+            elif mobile_perf > 0:
+                lighthouse_score = mobile_perf * 10
+                print(f"  Lighthouse Score: {lighthouse_score}/10 (Mobile only)")
+            else:
+                lighthouse_score = 0
+                print(f"  Lighthouse Score: 0/10 (Both failed)")
+            
+            # IMPROVED SCORING: More balanced weights
+            if lighthouse_score > 0:
+                # If Lighthouse is excellent (>8), give it more weight
+                if lighthouse_score > 8:
+                    # 40% Playwright + 60% Lighthouse for excellent performance
+                    combined_score = (playwright_score * 0.4) + (lighthouse_score * 0.6)
+                    print(f"  Combined Score: {combined_score}/10 (40% Playwright + 60% Lighthouse - Excellent Performance)")
+                else:
+                    # 50% Playwright + 50% Lighthouse for normal performance
+                    combined_score = (playwright_score * 0.5) + (lighthouse_score * 0.5)
+                    print(f"  Combined Score: {combined_score}/10 (50% Playwright + 50% Lighthouse - Balanced)")
+            else:
+                # Lighthouse failed - use 90% of Playwright score
+                combined_score = playwright_score * 0.9
+                print(f"  Combined Score: {combined_score}/10 (90% Playwright only - Lighthouse failed)")
+        else:
+            combined_score = playwright_score * 0.9
+            print(f"  Combined Score: {combined_score}/10 (90% Playwright only - Lighthouse unavailable)")
+        
+        return round(combined_score, 1)
+
+
+
+    def _extract_performance_summary(self, lighthouse_results):
+        """Extract key performance metrics for summary display with desktop fallback"""
+        if not lighthouse_results or lighthouse_results.get('error'):
+            return {}
+        
+        desktop = lighthouse_results.get('desktop', {})
+        mobile = lighthouse_results.get('mobile', {})
+        
+        # Handle desktop metrics
+        desktop_performance = 0
+        desktop_accessibility = 0
+        desktop_fcp = 'N/A'
+        desktop_lcp = 'N/A'
+        
+        if not desktop.get('error'):
+            desktop_performance = desktop.get('scores', {}).get('performance', 0)
+            desktop_accessibility = desktop.get('scores', {}).get('accessibility', 0)
+            desktop_fcp = desktop.get('metrics', {}).get('first-contentful-paint', 'N/A')
+            desktop_lcp = desktop.get('metrics', {}).get('largest-contentful-paint', 'N/A')
+        
+        # Handle mobile metrics
+        mobile_performance = 0
+        mobile_accessibility = 0
+        mobile_fcp = 'N/A'
+        mobile_lcp = 'N/A'
+        
+        if not mobile.get('error'):
+            mobile_performance = mobile.get('scores', {}).get('performance', 0)
+            mobile_accessibility = mobile.get('scores', {}).get('accessibility', 0)
+            mobile_fcp = mobile.get('metrics', {}).get('first-contentful-paint', 'N/A')
+            mobile_lcp = mobile.get('metrics', {}).get('largest-contentful-paint', 'N/A')
+        
+        return {
+            'desktop_performance': desktop_performance,
+            'mobile_performance': mobile_performance,
+            'desktop_accessibility': desktop_accessibility,
+            'mobile_accessibility': mobile_accessibility,
+            'desktop_error': desktop.get('error'),
+            'mobile_error': mobile.get('error'),
+            'key_metrics': {
+                'desktop_fcp': desktop_fcp,
+                'mobile_fcp': mobile_fcp,
+                'desktop_lcp': desktop_lcp,
+                'mobile_lcp': mobile_lcp
+            }
+        }
+
+
 
     
     def get_output(self):
-        """Main method to run browser functionality tests"""
+        """Main method to run browser functionality tests with Lighthouse integration"""
         # Check if simulation exists
         sim_path = os.path.join(self.repo_path, "experiment", "simulation", "index.html")
         if not os.path.exists(sim_path):
@@ -967,12 +1292,15 @@ Return a JSON with test scenarios:
                 "browser_score": 0,
                 "status": "MISSING",
                 "message": "No simulation found to test",
+                "overall_score": 0,
                 "total_tests": 0,
                 "passed_tests": 0,
                 "failed_tests": 0,
                 "error_tests": 0,
                 "test_results": [],
-                "screenshots": {}
+                "screenshots": {},
+                "lighthouse_results": {},
+                "performance_metrics": {}
             }
         
         # Start local server
@@ -982,16 +1310,19 @@ Return a JSON with test scenarios:
                 "browser_score": 0,
                 "status": "ERROR", 
                 "message": "Could not start local server",
+                "overall_score": 0,
                 "total_tests": 0,
                 "passed_tests": 0,
                 "failed_tests": 0,
                 "error_tests": 0,
                 "test_results": [],
-                "screenshots": {}
+                "screenshots": {},
+                "lighthouse_results": {},
+                "performance_metrics": {}
             }
         
         try:
-            # Run async browser tests
+            # Run async browser tests (existing Playwright functionality)
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
@@ -999,18 +1330,68 @@ Return a JSON with test scenarios:
                 asyncio.set_event_loop(loop)
             
             if loop.is_running():
-                # If loop is already running, create a new one
                 import nest_asyncio
                 nest_asyncio.apply()
-                results = loop.run_until_complete(self._run_browser_tests())
+                playwright_results = loop.run_until_complete(self._run_browser_tests())
             else:
-                results = loop.run_until_complete(self._run_browser_tests())
+                playwright_results = loop.run_until_complete(self._run_browser_tests())
             
-            return results
+            # Run Lighthouse performance analysis
+            lighthouse_results = {}
+            print("🚀 Starting Lighthouse performance analysis...")
+            
+            try:
+                success, lighthouse_data = self._run_lighthouse_cli(server_url)
+                if success:
+                    lighthouse_results = lighthouse_data
+                    print("✅ Lighthouse analysis completed successfully")
+                else:
+                    lighthouse_results = {'error': lighthouse_data}
+                    print(f"⚠️ Lighthouse analysis failed: {lighthouse_data}")
+            except Exception as lighthouse_error:
+                lighthouse_results = {'error': f"Lighthouse execution failed: {str(lighthouse_error)}"}
+                print(f"❌ Lighthouse error: {lighthouse_error}")
+            
+            # Calculate combined score
+            combined_score = self._calculate_combined_score(playwright_results, lighthouse_results)
+            
+            # Extract performance summary
+            performance_metrics = self._extract_performance_summary(lighthouse_results)
+            
+            # Ensure all required fields are present
+            final_results = {
+                "browser_score": combined_score,
+                "overall_score": combined_score,  # Add this field for backward compatibility
+                "status": "SUCCESS" if playwright_results.get('status') == 'SUCCESS' else playwright_results.get('status', 'ERROR'),
+                "message": playwright_results.get('message', ''),
+                "total_tests": playwright_results.get('total_tests', 0),
+                "passed_tests": playwright_results.get('passed_tests', 0),
+                "failed_tests": playwright_results.get('failed_tests', 0),
+                "error_tests": playwright_results.get('error_tests', 0),
+                "test_results": playwright_results.get('test_results', []),
+                "screenshots": playwright_results.get('screenshots', {}),
+                "playwright_results": playwright_results,
+                "lighthouse_results": lighthouse_results,
+                "performance_metrics": performance_metrics,
+                "execution_metrics": playwright_results.get('execution_metrics', {}),
+                "test_plan_used": playwright_results.get('test_plan_used', {}),
+                "simulation_context": playwright_results.get('simulation_context', {})
+            }
+            
+            # Debug output
+            print(f"🔍 Final Results Debug:")
+            print(f"  - Browser Score: {combined_score}")
+            print(f"  - Total Tests: {final_results['total_tests']}")
+            print(f"  - Passed Tests: {final_results['passed_tests']}")
+            print(f"  - Screenshots: {len(final_results['screenshots'])}")
+            print(f"  - Lighthouse Results: {'Yes' if lighthouse_results and not lighthouse_results.get('error') else 'No'}")
+            
+            return final_results
             
         except Exception as e:
             return {
                 "browser_score": 0,
+                "overall_score": 0,
                 "status": "ERROR",
                 "message": f"Testing failed: {str(e)}",
                 "total_tests": 0,
@@ -1018,11 +1399,15 @@ Return a JSON with test scenarios:
                 "failed_tests": 0,
                 "error_tests": 0,
                 "test_results": [],
-                "screenshots": self.screenshots  # Include any screenshots captured before failure
+                "screenshots": self.screenshots,
+                "lighthouse_results": {},
+                "performance_metrics": {}
             }
         finally:
             # Stop local server
             self._stop_local_server()
+
+
     
     def __del__(self):
         """Cleanup when object is destroyed"""
