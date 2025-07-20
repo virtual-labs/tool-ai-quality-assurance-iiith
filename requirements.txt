@@ -4,8 +4,9 @@ matplotlib
 langchain
 langchain_google_genai
 gitpython
-dotenv
+python-dotenv
 numpy
 toml
 playwright==1.42.0
+lighthouse-python-plus
 nest-asyncio
